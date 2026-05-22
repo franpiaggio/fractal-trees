@@ -1,24 +1,36 @@
-// Autonomous "ethereal flythrough" mode.
+// Autonomous "ethereal flythrough" mode — planning-based steering.
 //
-// Design goal: never abrupt. The camera floats through the chunked forest at
-// a constant walking speed, the heading meanders on a smooth sum-of-sines
-// (no discrete repicks, no jumps), altitude drifts up and down so it
-// sometimes skims the grass and sometimes lifts over the canopy, and the
-// look direction stays nearly forward with only a tiny added wobble.
+// Earlier versions used a per-tree repulsion field. That works for one or two
+// scattered obstacles but it's *reactive*: the camera only feels a tree once
+// it's in the corridor, and the resulting yaw nudge is local — it can't see
+// past the first tree to plan around the next. With dense forest that read
+// as "constant little corrections", and occasionally still grazed.
 //
-// Tree avoidance is a *forward corridor* scan, not a repulsion field: at
-// each frame we look down a narrow cone ahead, find every tree whose lateral
-// offset would clip the player's corridor, and add a yaw-rate nudge away
-// from each one. Urgency ramps up smoothly as the tree gets closer, so the
-// turn always begins early and finishes smoothly — never a swerve. The total
-// yaw rate is hard-capped so even a tight cluster of trees can only turn the
-// camera ~37°/s in the worst case.
+// This rewrite plans instead of reacts. Each frame:
 //
-// The existing `resolveCollisions` cylinder solver remains as a final
-// safety net; in normal play the corridor avoidance keeps us off it.
+//   1. Cast PROBE_COUNT fan-shaped probes spanning ±PROBE_HALF_FAN around
+//      the current heading. For each probe, compute the distance the camera
+//      could travel along that ray before any tree's safety cylinder clipped
+//      the corridor.  (Closed form: ray-vs-cylinder along + perpendicular.)
 //
-// API parity with `buildPlayer`: returns { controls: null, update, dispose,
-// EYE_HEIGHT, PLAYER_RADIUS }.
+//   2. Score each probe = clearance − small penalty for deviating from
+//      current heading. Pick the best. Result: `bestDelta` (angle offset to
+//      steer toward) and `bestClear` (how far the chosen lane is open).
+//
+//   3. Run `bestDelta` through *two* first-order low-pass filters in series
+//      — one on the desired angle, one on the yaw rate — so the camera
+//      cannot snap. Combined response time ≈ 0.7 s; with PROBE_RANGE = 28 m
+//      and FLOAT_SPEED = 2.5 m/s we have ~11 s of lookahead, so smoothing
+//      this hard never lets us hit a tree.
+//
+//   4. Brake speed when `bestClear` is short (tight passes only).
+//
+// A one-shot 360° scan at startup sets the initial heading toward the
+// roomiest opening — the camera will never charge straight into a trunk on
+// first frame.
+//
+// Existing `resolveCollisions` cylinder solver still acts as a final safety
+// net behind everything.
 
 import * as THREE from 'three';
 import { resolveCollisions } from './collision.js';
@@ -26,162 +38,176 @@ import { resolveCollisions } from './collision.js';
 const PLAYER_RADIUS = 0.45;
 
 // ── Forward motion ─────────────────────────────────────────────────────────
-// Nearly constant speed. Variations >~10% read as "the camera is fidgeting".
-const FLOAT_SPEED  = 2.5;             // m/s — calm but with a bit of forward intent
-const SPEED_VARY   = 0.10;            // ± fraction on a slow sine
-const SPEED_PERIOD = 21;              // s
+const FLOAT_SPEED   = 2.5;          // m/s — calm forward intent (+30 % over original)
+const SPEED_VARY    = 0.10;
+const SPEED_PERIOD  = 21;
 
-// ── Heading drift ──────────────────────────────────────────────────────────
-// Sum of three slow sines → C∞-smooth angular path, no discrete jumps ever.
-// Each component's peak yaw-rate contribution is amp × freq (because we use
-// the derivative). The sum is bounded by Σ(amp × freq) ≈ 0.077 rad/s,
-// i.e. roughly 4.4°/s — a barely-perceptible meander.
+// ── Smooth meander (drift) ─────────────────────────────────────────────────
+// Sum of three slow sines → C∞ heading; peak yaw-rate contribution Σ amp·freq.
 const YAW_DRIFT = [
-  { amp: 0.55, freq: 0.038, phase: 1.2 },   // ≈ 0.021 rad/s peak
-  { amp: 0.40, freq: 0.069, phase: 2.7 },   // ≈ 0.028 rad/s peak
-  { amp: 0.25, freq: 0.113, phase: 4.4 },   // ≈ 0.028 rad/s peak
+  { amp: 0.55, freq: 0.038, phase: 1.2 },
+  { amp: 0.40, freq: 0.069, phase: 2.7 },
+  { amp: 0.25, freq: 0.113, phase: 4.4 },
 ];
 
-// ── Tree avoidance (forward-corridor scan) ─────────────────────────────────
-// Numbers here are tuned to **always clear a tree by ≥ CORRIDOR_PAD metres**
-// at FLOAT_SPEED. Earlier we had a too-narrow pad + a per-tree urgency that
-// faded with forward distance, so the nudge only got strong once the tree
-// was already beside the camera — looked like grazing. Now: wider pad,
-// stronger per-tree yaw, no distance fade on urgency (forward-distance is
-// just an in/out filter), plus a soft brake when threats are tight.
-const LOOK_AHEAD       = 14.0;        // m — bumped with speed so reaction-time-in-seconds is constant
-const CORRIDOR_PAD     = 2.6;         // m — clearance band on each side beyond player+trunk radii
-const AVOID_MAX_YAW    = 0.95;        // rad/s — peak yaw nudge at the trunk skin (per tree)
-const YAW_RATE_CAP     = 1.10;        // rad/s — total cap (~63°/s); only reached in tight clusters
-const BRAKE_MIN_FRAC   = 0.45;        // speed multiplier when a tree is hugging the corridor
+// ── Planning-based avoidance ───────────────────────────────────────────────
+const PROBE_COUNT     = 13;            // odd → straight-ahead always sampled
+const PROBE_HALF_FAN  = Math.PI / 2;   // ± 90°  — wide enough to find any escape
+const PROBE_RANGE     = 28;            // m — plan ~ 11 s ahead at cruise
+const PROBE_LANE_PAD  = 2.2;           // m — required lateral clearance on top of trunk+player
+const STEER_COST_WT   = 0.08;          // how much to prefer "less turn" when clearance ties
+const TURN_GAIN       = 1.3;           // rad/s per rad of bestDelta (before slewing)
+const YAW_RATE_CAP    = 0.85;          // rad/s — hard cap (~ 49°/s) — only hit in tight clusters
 
-// ── Smoothing (low-pass) ───────────────────────────────────────────────────
-// Avoidance and brake both jump when a threat enters or leaves the corridor.
-// Slewing the *output* through a first-order filter turns those steps into
-// smooth ramps so the camera never snaps — it eases into a turn and eases
-// out of it. Drift is already C∞ smooth so the filter is a no-op for it.
-const YAW_SLEW   = 3.2;               // 1/s — yaw-rate time constant ≈ 0.31 s
-const BRAKE_SLEW = 2.4;               // 1/s — brake time constant ≈ 0.42 s
+// ── Brake (only when chosen lane's clearance is short) ─────────────────────
+const BRAKE_FREE_DIST = 14;            // m — full speed beyond this
+const BRAKE_MIN       = 0.40;          // ratio when at near-zero clearance
+
+// ── Two-stage smoothing — both filters are first-order low-pass ────────────
+// Stage A smooths the *target angle* coming out of the probe scorer.
+// Stage B smooths the *yaw rate* before it integrates into heading.
+// Cascading gives a more rounded response than a single pole — no step at
+// any point in the pipeline.
+const DELTA_SLEW = 1.5;                // 1/s — τ ≈ 0.67 s
+const YAW_SLEW   = 3.0;                // 1/s — τ ≈ 0.33 s
+const BRAKE_SLEW = 2.3;                // 1/s — τ ≈ 0.43 s
 
 // ── Altitude ───────────────────────────────────────────────────────────────
-// Two long, non-integer-ratio sines. Peak height ~ HEIGHT_BASE + HEIGHT_AMP,
-// floor clamped to HEIGHT_MIN so we don't dip into the ground.
 const HEIGHT_BASE      = 3.0;
-const HEIGHT_AMP       = 2.6;         // total swing ≈ 5.2 m peak-to-peak
-const HEIGHT_PERIOD_A  = 26;          // s
-const HEIGHT_PERIOD_B  = 11.7;        // s
-const HEIGHT_MIN       = 1.4;         // m — never crash into grass
+const HEIGHT_AMP       = 2.6;
+const HEIGHT_PERIOD_A  = 26;
+const HEIGHT_PERIOD_B  = 11.7;
+const HEIGHT_MIN       = 1.4;
 
-// ── Look direction ─────────────────────────────────────────────────────────
-// Camera looks along heading with TINY wobble — heading itself already turns,
-// so disagreement between body and eyes should be sub-degree most of the time.
-const LOOK_PROJ       = 12.0;         // m — target distance for `lookAt`
-const LOOK_YAW_AMP    = 0.06;         // rad (~3.4°)
-const LOOK_PITCH_AMP  = 0.04;         // rad (~2.3°)
-const LOOK_YAW_PERIOD = 19.0;         // s
-const LOOK_PITCH_PERIOD = 13.5;       // s
+// ── Look direction wobble (tiny — the heading itself already drifts) ───────
+const LOOK_PROJ         = 12.0;
+const LOOK_YAW_AMP      = 0.06;
+const LOOK_PITCH_AMP    = 0.04;
+const LOOK_YAW_PERIOD   = 19.0;
+const LOOK_PITCH_PERIOD = 13.5;
 
 export function buildAutoExplorer(camera) {
   camera.position.set(0, HEIGHT_BASE, 0);
 
   let elapsed = 0;
-  // Random per-session offsets so two reloads don't trace the same path.
   const t0 = Math.random() * 1000;
   let heading = Math.random() * Math.PI * 2;
-  // Low-passed state: what we apply to the camera each frame. Updated by a
-  // first-order filter chasing the per-frame `target` values from avoidance.
+
+  // Filter state — both stages start coherent with their inputs.
+  let deltaState   = 0;
   let yawRateState = 0;
   let brakeState   = 1;
+  let bootstrapped = false;
 
   const phase = {
     yaw:   Math.random() * Math.PI * 2,
     pitch: Math.random() * Math.PI * 2,
     speed: Math.random() * Math.PI * 2,
   };
-
   const tmpLook = new THREE.Vector3();
 
-  // d/dt of Σ amp·sin(freq·t + phase)  =  Σ amp·freq·cos(freq·t + phase).
-  // Returns a continuous, slowly-varying yaw-rate in rad/s.
+  // Continuous drift's exact derivative.
   function smoothDriftRate(time) {
     let r = 0;
-    for (const c of YAW_DRIFT) {
-      r += c.amp * c.freq * Math.cos(c.freq * time + c.phase);
-    }
+    for (const c of YAW_DRIFT) r += c.amp * c.freq * Math.cos(c.freq * time + c.phase);
     return r;
   }
 
-  // Sample trees inside a forward corridor; each contributes a yaw nudge
-  // away from itself, weighted by **lateral closeness only** (not by forward
-  // distance). Returns { yawRate, brake } — `brake` ∈ [BRAKE_MIN_FRAC, 1] is a
-  // speed multiplier that drops as the tightest tree in the corridor gets
-  // closer to the corridor centerline.
-  function avoidanceField(world) {
-    const fwdX = Math.sin(heading);
-    const fwdZ = Math.cos(heading);
-    const trees = world.getNearbyTrees(
-      camera.position.x + fwdX * (LOOK_AHEAD * 0.5),
-      camera.position.z + fwdZ * (LOOK_AHEAD * 0.5),
-      LOOK_AHEAD * 0.7 + 2,
-    );
-    let yawRate = 0;
-    let tightest = 1;                                   // 0 = trunk skin, 1 = no threat
-    for (const t of trees) {
-      const dx = t.x - camera.position.x;
-      const dz = t.z - camera.position.z;
-      const along = dx * fwdX + dz * fwdZ;
-      // Include trees just behind too — they still threaten our flank as we
-      // exit, and a touch of nudge keeps us from clipping on the way past.
-      if (along < -PLAYER_RADIUS || along > LOOK_AHEAD) continue;
-      const lateral = dx * fwdZ - dz * fwdX;
-      const safe    = (t.colRadius || 0.3) + PLAYER_RADIUS + CORRIDOR_PAD;
+  // Distance the player corridor can travel along (dx, dz) before clipping a tree.
+  // Closed-form ray-vs-cylinder: along-axis distance to the cylinder's first hit.
+  function probeClearance(trees, dx, dz) {
+    let block = PROBE_RANGE;
+    for (const tree of trees) {
+      const tx = tree.x - camera.position.x;
+      const tz = tree.z - camera.position.z;
+      const along   = tx * dx + tz * dz;
+      if (along <= 0 || along > PROBE_RANGE) continue;
+      const lateral = tx * dz - tz * dx;
+      const safe    = (tree.colRadius || 0.3) + PLAYER_RADIUS + PROBE_LANE_PAD;
       const absLat  = Math.abs(lateral);
-      if (absLat > safe) continue;
-
-      const lateralFrac = absLat / safe;                // 0 = trunk skin, 1 = corridor edge
-      if (lateralFrac < tightest) tightest = lateralFrac;
-
-      // Yaw nudge: only trees AHEAD turn the camera (turning toward a
-      // behind-flank tree would steer back into it). Strength is purely a
-      // function of how close the tree is to our centerline.
-      if (along > 0) {
-        const lateralU = 1 - lateralFrac;
-        const side = lateral === 0 ? 1 : Math.sign(lateral);
-        yawRate += -side * lateralU * AVOID_MAX_YAW;
-      }
+      if (absLat >= safe) continue;
+      // Hit at along − sqrt(safe² − lat²) — back off the half-chord so we
+      // don't treat a tree's centre as the impact point.
+      const half = Math.sqrt(safe * safe - absLat * absLat);
+      const hit  = Math.max(0, along - half);
+      if (hit < block) block = hit;
     }
-    // Lerp brake from BRAKE_MIN_FRAC (tightest=0) up to 1 (tightest=1).
-    const brake = BRAKE_MIN_FRAC + (1 - BRAKE_MIN_FRAC) * tightest;
-    return { yawRate, brake };
+    return block;
+  }
+
+  // Score the fan and return the best (delta, clearance) pair.
+  function evaluateProbes(world) {
+    const trees = world.getNearbyTrees(camera.position.x, camera.position.z, PROBE_RANGE + 4);
+    let bestScore = -Infinity;
+    let bestDelta = 0;
+    let bestClear = 0;
+    for (let i = 0; i < PROBE_COUNT; i++) {
+      const t = i / (PROBE_COUNT - 1);
+      const delta = -PROBE_HALF_FAN + 2 * PROBE_HALF_FAN * t;
+      const a = heading + delta;
+      const clear = probeClearance(trees, Math.sin(a), Math.cos(a));
+      const score = (clear / PROBE_RANGE) - STEER_COST_WT * Math.abs(delta) / PROBE_HALF_FAN;
+      if (score > bestScore) { bestScore = score; bestDelta = delta; bestClear = clear; }
+    }
+    return { bestDelta, bestClear };
+  }
+
+  // Run once: full 360° pick so we never start facing a tree.
+  function bootstrapInitialHeading(world) {
+    const trees = world.getNearbyTrees(camera.position.x, camera.position.z, PROBE_RANGE + 4);
+    const N = 24;
+    let bestClear = -1;
+    let bestAngle = heading;
+    for (let i = 0; i < N; i++) {
+      const a = (i / N) * Math.PI * 2;
+      const clear = probeClearance(trees, Math.sin(a), Math.cos(a));
+      if (clear > bestClear) { bestClear = clear; bestAngle = a; }
+    }
+    heading = bestAngle;
+    deltaState = 0;
+    yawRateState = 0;
   }
 
   function update(dt, world) {
     elapsed += dt;
 
-    // Heading: continuous drift + corridor avoidance, low-passed, integrated.
-    // The slewing turns step-changes in `avoidRate` into smooth ramps so the
-    // camera eases into and out of every correction — no snap.
+    if (!bootstrapped) {
+      bootstrapInitialHeading(world);
+      bootstrapped = true;
+    }
+
+    // ── Plan ────────────────────────────────────────────────────────────
+    const { bestDelta, bestClear } = evaluateProbes(world);
+
+    // ── Stage A: low-pass the desired angle ────────────────────────────
+    const kDelta = 1 - Math.exp(-DELTA_SLEW * dt);
+    deltaState += (bestDelta - deltaState) * kDelta;
+
+    // ── Stage B: convert smoothed angle → desired yaw rate, low-pass ──
     const driftRate = smoothDriftRate(elapsed + t0);
-    const { yawRate: avoidRate, brake } = avoidanceField(world);
-    let yawRateTarget = driftRate + avoidRate;
-    if (yawRateTarget >  YAW_RATE_CAP) yawRateTarget =  YAW_RATE_CAP;
-    if (yawRateTarget < -YAW_RATE_CAP) yawRateTarget = -YAW_RATE_CAP;
+    let yawTarget = driftRate + deltaState * TURN_GAIN;
+    if (yawTarget >  YAW_RATE_CAP) yawTarget =  YAW_RATE_CAP;
+    if (yawTarget < -YAW_RATE_CAP) yawTarget = -YAW_RATE_CAP;
     const kYaw = 1 - Math.exp(-YAW_SLEW * dt);
-    yawRateState += (yawRateTarget - yawRateState) * kYaw;
+    yawRateState += (yawTarget - yawRateState) * kYaw;
     heading += yawRateState * dt;
 
-    // Velocity (heading × nearly-constant speed × low-passed brake). Avoidance
-    // only changes heading; the brake only changes magnitude — both smoothed,
-    // both slow to step.
+    // ── Brake target from chosen-lane clearance, low-passed ────────────
+    let brakeTarget = 1;
+    if (bestClear < BRAKE_FREE_DIST) {
+      brakeTarget = BRAKE_MIN + (1 - BRAKE_MIN) * (bestClear / BRAKE_FREE_DIST);
+    }
     const kBrake = 1 - Math.exp(-BRAKE_SLEW * dt);
-    brakeState += (brake - brakeState) * kBrake;
+    brakeState += (brakeTarget - brakeState) * kBrake;
+
+    // ── Velocity ──────────────────────────────────────────────────────
     const cruise = FLOAT_SPEED * (1 + SPEED_VARY *
                    Math.sin(phase.speed + elapsed * (2 * Math.PI / SPEED_PERIOD)));
     const speed = cruise * brakeState;
     const vx = Math.sin(heading) * speed;
     const vz = Math.cos(heading) * speed;
 
-    // Move + collision safety net (should rarely fire — avoidance turns early).
+    // ── Move + collision safety net ───────────────────────────────────
     const nextX = camera.position.x + vx * dt;
     const nextZ = camera.position.z + vz * dt;
     const collTrees = world.getNearbyTrees(nextX, nextZ, PLAYER_RADIUS + 1);
@@ -189,14 +215,13 @@ export function buildAutoExplorer(camera) {
     camera.position.x = rx;
     camera.position.z = rz;
 
-    // Altitude — long non-integer periods so the rise/fall feels natural.
+    // ── Altitude ──────────────────────────────────────────────────────
     const h = HEIGHT_BASE
             + 0.62 * HEIGHT_AMP * Math.sin(elapsed * (2 * Math.PI / HEIGHT_PERIOD_A))
             + 0.38 * HEIGHT_AMP * Math.sin(elapsed * (2 * Math.PI / HEIGHT_PERIOD_B) + 1.7);
     camera.position.y = Math.max(HEIGHT_MIN, h);
 
-    // Look direction: nearly the heading, plus a tiny wobble. The heading is
-    // already drifting, so layering big amplitudes on top would feel busy.
+    // ── Look direction ────────────────────────────────────────────────
     const lookYaw = heading + LOOK_YAW_AMP *
                     Math.sin(phase.yaw + elapsed * (2 * Math.PI / LOOK_YAW_PERIOD));
     const lookPitch = LOOK_PITCH_AMP *
