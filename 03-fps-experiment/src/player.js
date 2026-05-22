@@ -23,7 +23,7 @@ const LOOK_YAW_SPEED = 1.7;       // rad/s, arrow ← →
 const LOOK_PITCH_SPEED = 1.3;     // rad/s, arrow ↑ ↓
 const MAX_PITCH = Math.PI / 2 - 0.04;
 
-export function buildPlayer(camera, domElement) {
+export function buildPlayer(camera, domElement, scene) {
   const controls = new PointerLockControls(camera, domElement);
   camera.position.set(0, EYE_HEIGHT, 0);
 
@@ -39,6 +39,59 @@ export function buildPlayer(camera, domElement) {
   const kup   = e => keys.delete(e.code);
   window.addEventListener('keydown', kdown);
   window.addEventListener('keyup', kup);
+
+  // ── Debug visuals for collisions ──
+  const debugGroup = new THREE.Group();
+  if (scene) scene.add(debugGroup);
+
+  const _tmpV0 = new THREE.Vector3();
+  const _tmpV1 = new THREE.Vector3();
+
+  function clearDebugLines() {
+    while (debugGroup.children.length) {
+      const child = debugGroup.children[0];
+      if (child.geometry) child.geometry.dispose();
+      if (child.material) child.material.dispose();
+      debugGroup.remove(child);
+    }
+  }
+
+  function showDebugCollisions(fromX, fromZ, toX, toZ, collisions) {
+    clearDebugLines();
+    if (!collisions.length) return;
+
+    // Red line: intended position -> resolved position (total push vector)
+    const pushGeo = new THREE.BufferGeometry().setFromPoints([
+      _tmpV0.set(fromX, 0.05, fromZ),
+      _tmpV1.set(toX,   0.05, toZ),
+    ]);
+    const pushMat = new THREE.LineBasicMaterial({
+      color: 0xff3333,
+      depthTest: false,
+      transparent: true,
+      opacity: 0.9,
+    });
+    const pushLine = new THREE.Line(pushGeo, pushMat);
+    pushLine.renderOrder = 999;
+    debugGroup.add(pushLine);
+
+    // Yellow lines: player -> each colliding tree trunk
+    for (const c of collisions) {
+      const treeGeo = new THREE.BufferGeometry().setFromPoints([
+        _tmpV0.set(c.playerX, 0.05, c.playerZ),
+        _tmpV1.set(c.treeX,   0.05, c.treeZ),
+      ]);
+      const treeMat = new THREE.LineBasicMaterial({
+        color: 0xffaa00,
+        depthTest: false,
+        transparent: true,
+        opacity: 0.6,
+      });
+      const treeLine = new THREE.Line(treeGeo, treeMat);
+      treeLine.renderOrder = 999;
+      debugGroup.add(treeLine);
+    }
+  }
 
   function update(dt, world) {
     // Arrow-key look runs whether or not the pointer is locked — lets you
@@ -89,9 +142,12 @@ export function buildPlayer(camera, domElement) {
     const nextX = camera.position.x + velocity.x * dt;
     const nextZ = camera.position.z + velocity.z * dt;
     const trees = world.getNearbyTrees(nextX, nextZ, PLAYER_RADIUS + 1);
-    const [resolvedX, resolvedZ] = resolveCollisions(nextX, nextZ, PLAYER_RADIUS, trees);
+    const result = resolveCollisions(nextX, nextZ, PLAYER_RADIUS, trees);
+    const [resolvedX, resolvedZ] = result.pos;
     camera.position.x = resolvedX;
     camera.position.z = resolvedZ;
+
+    showDebugCollisions(nextX, nextZ, resolvedX, resolvedZ, result.collisions);
 
     // Bob amplitude and frequency blend with sprintFactor so the shake eases
     // in/out instead of snapping. Amplitude stays small even at full sprint —
@@ -107,7 +163,9 @@ export function buildPlayer(camera, domElement) {
   function dispose() {
     window.removeEventListener('keydown', kdown);
     window.removeEventListener('keyup', kup);
+    clearDebugLines();
+    if (scene) scene.remove(debugGroup);
   }
 
-  return { controls, update, dispose, EYE_HEIGHT, PLAYER_RADIUS };
+  return { controls, update, dispose, EYE_HEIGHT, PLAYER_RADIUS, debugGroup };
 }

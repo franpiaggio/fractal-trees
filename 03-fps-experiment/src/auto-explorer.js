@@ -25,17 +25,20 @@ const SPEED_VARY   = 0.10;
 const SPEED_PERIOD = 21;
 
 // ── Avoidance geometry ─────────────────────────────────────────────────────
-const LANE_PAD     = 2.0;             // m extra clearance per side
-const TRIGGER_DIST = 10;              // m — enter TURNING when clearance < this
-const RELEASE_DIST = 16;              // m — exit TURNING when clearance ≥ this
+const LANE_PAD     = 1.0;             // m extra clearance per side
+const TRIGGER_DIST = 8;               // m — enter TURNING when this close
+const RELEASE_DIST = 15;              // m — exit TURNING once this clear
 const SCAN_RANGE   = RELEASE_DIST + 2;
+// When picking a turn side, evaluate clearance at this angle offset to choose
+// the side with more room (avoids turning into another tree cluster).
+const SIDE_PROBE   = 0.4;             // rad — ~23° offset for left/right eval
 
 // ── Turn ───────────────────────────────────────────────────────────────────
-const TURN_RATE = 0.40;               // rad/s constant rate while TURNING (~23°/s)
-const YAW_SLEW  = 1.8;               // 1/s — low-pass so transitions ease
+const TURN_RATE = 0.45;               // rad/s while TURNING (~26°/s)
+const YAW_SLEW  = 3.0;               // 1/s — faster ramp so turn starts immediately
 
 // ── Brake ──────────────────────────────────────────────────────────────────
-const BRAKE_START = 12;
+const BRAKE_START = 8;
 const BRAKE_MIN   = 0.32;
 const BRAKE_SLEW  = 1.5;
 
@@ -53,7 +56,7 @@ const LOOK_PITCH_AMP    = 0.035;
 const LOOK_YAW_PERIOD   = 22.0;
 const LOOK_PITCH_PERIOD = 15.0;
 
-export function buildAutoExplorer(camera) {
+export function buildAutoExplorer(camera, scene) {
   camera.position.set(0, HEIGHT_BASE, 0);
 
   let elapsed      = 0;
@@ -70,6 +73,18 @@ export function buildAutoExplorer(camera) {
     speed: Math.random() * Math.PI * 2,
   };
   const tmpLook = new THREE.Vector3();
+
+  // ── Debug line: red = TURNING (collision ahead), green = STRAIGHT (free) ─
+  const _dbgMat = new THREE.LineBasicMaterial({ color: 0x00ff00, depthTest: false, linewidth: 2 });
+  const _dbgPts = new Float32Array(6); // [x0,y0,z0, x1,y1,z1]
+  const _dbgGeo = new THREE.BufferGeometry();
+  _dbgGeo.setAttribute('position', new THREE.BufferAttribute(_dbgPts, 3));
+  const _dbgLine = new THREE.Line(_dbgGeo, _dbgMat);
+  _dbgLine.renderOrder = 999;
+  _dbgLine.frustumCulled = false;
+  const debugGroup = new THREE.Group();
+  debugGroup.add(_dbgLine);
+  if (scene) scene.add(debugGroup);
 
   // Distance the player corridor can travel along (dx,dz) before a tree clips it.
   function fwdClearance(trees, dx, dz, limit) {
@@ -130,9 +145,10 @@ export function buildAutoExplorer(camera) {
     // ── State machine ─────────────────────────────────────────────────────
     if (state === 'STRAIGHT') {
       if (clear < TRIGGER_DIST) {
-        const lat = findBlockerSide(trees, fwdX, fwdZ, TRIGGER_DIST + 4);
-        // Tree on the left (lat > 0) → steer right (+1); tree on right → left (-1).
-        turnSide = lat !== null ? (lat >= 0 ? 1 : -1) : (Math.random() < 0.5 ? 1 : -1);
+          // Pick the side with more forward clearance (not just blocker direction).
+        const clL = fwdClearance(trees, Math.sin(heading - SIDE_PROBE), Math.cos(heading - SIDE_PROBE), SCAN_RANGE);
+        const clR = fwdClearance(trees, Math.sin(heading + SIDE_PROBE), Math.cos(heading + SIDE_PROBE), SCAN_RANGE);
+        turnSide = clR >= clL ? 1 : -1;
         state = 'TURNING';
       }
     } else {
@@ -177,6 +193,21 @@ export function buildAutoExplorer(camera) {
       + 0.38 * HEIGHT_AMP * Math.sin(elapsed * (2 * Math.PI / HEIGHT_PERIOD_B) + 1.7);
     camera.position.y = Math.max(HEIGHT_MIN, h);
 
+    // ── Debug bar ─────────────────────────────────────────────────────────
+    // A horizontal bar perpendicular to heading at TRIGGER_DIST ahead.
+    // Visible from first-person as a horizontal line crossing the view.
+    // Green = STRAIGHT (free), Red = TURNING (collision committed).
+    {
+      const gx = camera.position.x + fwdX * TRIGGER_DIST;
+      const gz = camera.position.z + fwdZ * TRIGGER_DIST;
+      const px = Math.cos(heading) * 3;   // perpendicular, 3 m each side
+      const pz = -Math.sin(heading) * 3;
+      _dbgPts[0] = gx - px; _dbgPts[1] = camera.position.y; _dbgPts[2] = gz - pz;
+      _dbgPts[3] = gx + px; _dbgPts[4] = camera.position.y; _dbgPts[5] = gz + pz;
+    }
+    _dbgGeo.attributes.position.needsUpdate = true;
+    _dbgMat.color.set(state === 'TURNING' ? 0xff2200 : 0x00ff44);
+
     // ── Look direction ────────────────────────────────────────────────────
     const lookYaw = heading
       + LOOK_YAW_AMP * Math.sin(phase.yaw + elapsed * (2 * Math.PI / LOOK_YAW_PERIOD));
@@ -190,7 +221,10 @@ export function buildAutoExplorer(camera) {
     camera.lookAt(tmpLook);
   }
 
-  function dispose() {}
+  function dispose() {
+    _dbgGeo.dispose();
+    _dbgMat.dispose();
+  }
 
-  return { controls: null, update, dispose, EYE_HEIGHT: HEIGHT_BASE, PLAYER_RADIUS, isAuto: true };
+  return { controls: null, update, dispose, debugGroup, EYE_HEIGHT: HEIGHT_BASE, PLAYER_RADIUS, isAuto: true };
 }

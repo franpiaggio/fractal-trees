@@ -81,6 +81,7 @@ function disposeExplorer() {
   if (explorer.controls && explorer.controls.isLocked) {
     explorer.controls.unlock();
   }
+  if (explorer.debugGroup) scene.remove(explorer.debugGroup);
   explorer.dispose();
   explorer = null;
 }
@@ -93,7 +94,7 @@ function startMode(nextMode) {
   document.body.classList.toggle('auto-mode', nextMode === 'auto');
 
   if (nextMode === 'free') {
-    explorer = buildPlayer(camera, renderer.domElement);
+    explorer = buildPlayer(camera, renderer.domElement, scene);
     explorer.controls.addEventListener('unlock', onFreeUnlock);
     // Defer the lock request one frame so it isn't fighting the click that
     // hid the overlay (Chrome rejects pointer-lock from synthetic events).
@@ -101,7 +102,7 @@ function startMode(nextMode) {
       try { explorer.controls.lock(); } catch (_) { /* user-gesture race */ }
     });
   } else if (nextMode === 'auto') {
-    explorer = buildAutoExplorer(camera);
+    explorer = buildAutoExplorer(camera, scene);
     // Briefly surface the Esc hint, then fade — the CSS transition handles
     // the actual easing; we only flip the .show class on/off here.
     if (autoHintTimer) clearTimeout(autoHintTimer);
