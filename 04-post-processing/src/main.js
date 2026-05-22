@@ -8,7 +8,16 @@ import { buildAutoExplorer }  from './auto-explorer.js';
 import { buildGrass }         from './grass.js';
 import { buildPipeline }      from './postprocessing.js';
 import { buildDust }          from './dust.js';
+import { enableGyro, isMobile } from './gyro.js';
 import { updateWind }         from './wind.js';
+
+const MOBILE = isMobile();
+if (MOBILE) {
+  // Replace the desktop hint ("press Esc to return") with mobile guidance.
+  // No Esc key on phones — instead instruct on tilt-to-look.
+  const hint = document.getElementById('auto-hint');
+  if (hint) hint.innerHTML = 'tilt phone to look around';
+}
 
 const appEl = document.getElementById('app');
 const overlay = document.getElementById('overlay');
@@ -106,7 +115,12 @@ function startMode(nextMode) {
     });
   } else if (nextMode === 'auto') {
     explorer = buildAutoExplorer(camera, scene);
-    // Briefly surface the Esc hint, then fade — the CSS transition handles
+    // On mobile, request gyroscope permission *now* — must be called from
+    // within the click handler that triggered startMode (iOS 13+ requires
+    // a user gesture). Fire-and-forget: the promise settles later, but
+    // requestPermission() is *called* synchronously here.
+    if (MOBILE) enableGyro();
+    // Briefly surface the hint, then fade — the CSS transition handles
     // the actual easing; we only flip the .show class on/off here.
     if (autoHintTimer) clearTimeout(autoHintTimer);
     autoHint.classList.add('show');

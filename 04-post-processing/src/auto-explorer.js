@@ -17,6 +17,9 @@
 import * as THREE from 'three';
 import { gsap } from 'gsap';
 import { resolveCollisions } from './collision.js';
+import { tickGyro, getGyro } from './gyro.js';
+
+const _WORLD_UP = new THREE.Vector3(0, 1, 0);
 
 const PLAYER_RADIUS = 0.45;
 
@@ -240,6 +243,16 @@ export function buildAutoExplorer(camera, scene) {
     );
     camera.lookAt(tmpLook);
     // NO roll / tilt. Horizon stays perfectly level — user wants zero shake.
+
+    // Gyroscope look-offset (mobile). Applied AFTER lookAt so the path of
+    // travel (driven by `heading` above) is untouched — the user can peek
+    // around without ever steering the camera off-course.
+    tickGyro(dt);
+    const g = getGyro();
+    if (g.active) {
+      camera.rotateOnWorldAxis(_WORLD_UP, g.yaw);
+      camera.rotateX(g.pitch);
+    }
   }
 
   function dispose() {
