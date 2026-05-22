@@ -9,6 +9,7 @@ on:
       - '03-fps-experiment/**'
       - '04-post-processing/**'
       - '05-graphics-tiers/**'
+      - '06-godrays/**'
       - 'pages/**'
       - '.github/workflows/deploy.yml'
   workflow_dispatch:
@@ -65,6 +66,12 @@ jobs:
           npm ci
           npm run build
 
+      - name: Build 06
+        working-directory: 06-godrays
+        run: |
+          npm ci
+          npm run build
+
       # Combine all builds + landing page into one deploy artifact.
       - name: Assemble deploy directory
         run: |
@@ -75,6 +82,7 @@ jobs:
           cp -r 03-fps-experiment/dist      _site/03
           cp -r 04-post-processing/dist     _site/04
           cp -r 05-graphics-tiers/dist      _site/05
+          cp -r 06-godrays/dist             _site/06
           ls -la _site
 
       - uses: actions/configure-pages@v5
