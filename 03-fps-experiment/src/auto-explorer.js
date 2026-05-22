@@ -1,100 +1,65 @@
-// Autonomous "ethereal flythrough" mode — planning-based steering.
+// Autonomous "ethereal flythrough" — state-machine steering.
 //
-// Earlier versions used a per-tree repulsion field. That works for one or two
-// scattered obstacles but it's *reactive*: the camera only feels a tree once
-// it's in the corridor, and the resulting yaw nudge is local — it can't see
-// past the first tree to plan around the next. With dense forest that read
-// as "constant little corrections", and occasionally still grazed.
+// Two states: STRAIGHT and TURNING.
 //
-// This rewrite plans instead of reacts. Each frame:
+//   STRAIGHT: heading locked. Each frame cast one ray forward. If a tree
+//             clips the corridor within TRIGGER_DIST → switch to TURNING,
+//             pick a side based on which side the blocker is on.
 //
-//   1. Cast PROBE_COUNT fan-shaped probes spanning ±PROBE_HALF_FAN around
-//      the current heading. For each probe, compute the distance the camera
-//      could travel along that ray before any tree's safety cylinder clipped
-//      the corridor.  (Closed form: ray-vs-cylinder along + perpendicular.)
+//   TURNING:  rotate at a fixed gentle rate toward the chosen side. Each
+//             frame re-cast the forward ray. When clearance ≥ RELEASE_DIST
+//             → back to STRAIGHT. RELEASE_DIST > TRIGGER_DIST is the
+//             hysteresis gap that prevents constant flip-flopping.
 //
-//   2. Score each probe = clearance − small penalty for deviating from
-//      current heading. Pick the best. Result: `bestDelta` (angle offset to
-//      steer toward) and `bestClear` (how far the chosen lane is open).
-//
-//   3. Run `bestDelta` through *two* first-order low-pass filters in series
-//      — one on the desired angle, one on the yaw rate — so the camera
-//      cannot snap. Combined response time ≈ 0.7 s; with PROBE_RANGE = 28 m
-//      and FLOAT_SPEED = 2.5 m/s we have ~11 s of lookahead, so smoothing
-//      this hard never lets us hit a tree.
-//
-//   4. Brake speed when `bestClear` is short (tight passes only).
-//
-// A one-shot 360° scan at startup sets the initial heading toward the
-// roomiest opening — the camera will never charge straight into a trunk on
-// first frame.
-//
-// Existing `resolveCollisions` cylinder solver still acts as a final safety
-// net behind everything.
+// The yaw rate is low-passed so mode transitions feel like easing, not snaps.
+// Speed brakes smoothly when a blocker is close, giving the turn more time.
 
 import * as THREE from 'three';
 import { resolveCollisions } from './collision.js';
 
 const PLAYER_RADIUS = 0.45;
 
-// ── Forward motion ─────────────────────────────────────────────────────────
-const FLOAT_SPEED   = 2.5;          // m/s — calm forward intent (+30 % over original)
-const SPEED_VARY    = 0.10;
-const SPEED_PERIOD  = 21;
+// ── Speed ──────────────────────────────────────────────────────────────────
+const FLOAT_SPEED  = 2.5;
+const SPEED_VARY   = 0.10;
+const SPEED_PERIOD = 21;
 
-// ── Planning-based avoidance ───────────────────────────────────────────────
-// The camera holds its heading completely until a tree is *close* in the
-// straight-ahead lane. Far trees are ignored — they'll either resolve
-// themselves as we approach or we'll start turning later. When we do turn,
-// it's at a deliberately low rate: ≤ 0.30 rad/s (≈ 17°/s) before smoothing.
-// Combined with the brake, this gives ample lateral clearance over a long,
-// slow arc rather than a sharp swerve.
-const PROBE_COUNT     = 11;            // odd → straight-ahead always sampled
-const PROBE_HALF_FAN  = Math.PI / 2;   // ± 90°  — needed only to find escapes from corners
-const PROBE_RANGE     = 22;            // m — probe range (only used when actually scanning)
-const PROBE_LANE_PAD  = 2.2;           // m — lateral clearance margin on top of trunk + player
-const CLEAR_AHEAD     = 10;            // m — straight clearance ≥ this → hold heading, no scan
-const STEER_COST_WT   = 0.18;          // strong "prefer less turn" — beats marginal lane wins
-const TURN_GAIN       = 0.55;          // rad/s per rad of bestDelta (gentle conversion)
-const YAW_RATE_CAP    = 0.30;          // rad/s — hard cap (~ 17°/s) — never feels abrupt
+// ── Avoidance geometry ─────────────────────────────────────────────────────
+const LANE_PAD     = 2.0;             // m extra clearance per side
+const TRIGGER_DIST = 10;              // m — enter TURNING when clearance < this
+const RELEASE_DIST = 16;              // m — exit TURNING when clearance ≥ this
+const SCAN_RANGE   = RELEASE_DIST + 2;
 
-// ── Brake (only when chosen lane's clearance is short) ─────────────────────
-// Triggers at the same distance as the turn — they ramp in together so the
-// camera both slows down and steers, giving the turn more time to complete.
-const BRAKE_FREE_DIST = 10;            // m — full speed beyond this
-const BRAKE_MIN       = 0.30;          // ratio when nearly at the trunk
+// ── Turn ───────────────────────────────────────────────────────────────────
+const TURN_RATE = 0.40;               // rad/s constant rate while TURNING (~23°/s)
+const YAW_SLEW  = 1.8;               // 1/s — low-pass so transitions ease
 
-// ── Two-stage smoothing — both filters are first-order low-pass ────────────
-// Time constants are deliberately long: ~ 1.1 s on the desired-angle filter,
-// ~ 0.55 s on the yaw-rate filter. Combined response ≈ 1.65 s, so even when
-// the planner suddenly says "turn 90°", the camera eases into that turn
-// over a couple seconds. With CLEAR_AHEAD = 10 m and braking, this is safe.
-const DELTA_SLEW = 0.9;                // 1/s — τ ≈ 1.1 s on desired angle
-const YAW_SLEW   = 1.8;                // 1/s — τ ≈ 0.55 s on yaw rate
-const BRAKE_SLEW = 1.6;                // 1/s — τ ≈ 0.63 s on brake
+// ── Brake ──────────────────────────────────────────────────────────────────
+const BRAKE_START = 12;
+const BRAKE_MIN   = 0.32;
+const BRAKE_SLEW  = 1.5;
 
 // ── Altitude ───────────────────────────────────────────────────────────────
-const HEIGHT_BASE      = 3.0;
-const HEIGHT_AMP       = 2.6;
-const HEIGHT_PERIOD_A  = 26;
-const HEIGHT_PERIOD_B  = 11.7;
-const HEIGHT_MIN       = 1.4;
+const HEIGHT_BASE     = 3.0;
+const HEIGHT_AMP      = 2.6;
+const HEIGHT_PERIOD_A = 26;
+const HEIGHT_PERIOD_B = 11.7;
+const HEIGHT_MIN      = 1.4;
 
-// ── Look direction wobble (tiny — the heading itself already drifts) ───────
+// ── Look wobble ────────────────────────────────────────────────────────────
 const LOOK_PROJ         = 12.0;
-const LOOK_YAW_AMP      = 0.06;
-const LOOK_PITCH_AMP    = 0.04;
-const LOOK_YAW_PERIOD   = 19.0;
-const LOOK_PITCH_PERIOD = 13.5;
+const LOOK_YAW_AMP      = 0.05;
+const LOOK_PITCH_AMP    = 0.035;
+const LOOK_YAW_PERIOD   = 22.0;
+const LOOK_PITCH_PERIOD = 15.0;
 
 export function buildAutoExplorer(camera) {
   camera.position.set(0, HEIGHT_BASE, 0);
 
-  let elapsed = 0;
-  let heading = Math.random() * Math.PI * 2;
-
-  // Filter state — both stages start coherent with their inputs.
-  let deltaState   = 0;
+  let elapsed      = 0;
+  let heading      = Math.random() * Math.PI * 2;
+  let state        = 'STRAIGHT';
+  let turnSide     = 0;        // +1 = right, -1 = left
   let yawRateState = 0;
   let brakeState   = 1;
   let bootstrapped = false;
@@ -106,128 +71,117 @@ export function buildAutoExplorer(camera) {
   };
   const tmpLook = new THREE.Vector3();
 
-  // Distance the player corridor can travel along (dx, dz) before clipping a tree.
-  // Closed-form ray-vs-cylinder: along-axis distance to the cylinder's first hit.
-  function probeClearance(trees, dx, dz) {
-    let block = PROBE_RANGE;
-    for (const tree of trees) {
-      const tx = tree.x - camera.position.x;
-      const tz = tree.z - camera.position.z;
-      const along   = tx * dx + tz * dz;
-      if (along <= 0 || along > PROBE_RANGE) continue;
-      const lateral = tx * dz - tz * dx;
-      const safe    = (tree.colRadius || 0.3) + PLAYER_RADIUS + PROBE_LANE_PAD;
-      const absLat  = Math.abs(lateral);
-      if (absLat >= safe) continue;
-      // Hit at along − sqrt(safe² − lat²) — back off the half-chord so we
-      // don't treat a tree's centre as the impact point.
-      const half = Math.sqrt(safe * safe - absLat * absLat);
-      const hit  = Math.max(0, along - half);
+  // Distance the player corridor can travel along (dx,dz) before a tree clips it.
+  function fwdClearance(trees, dx, dz, limit) {
+    let block = limit;
+    for (const t of trees) {
+      const tx = t.x - camera.position.x;
+      const tz = t.z - camera.position.z;
+      const along = tx * dx + tz * dz;
+      if (along <= 0 || along > limit) continue;
+      const lat  = tx * dz - tz * dx;
+      const safe = (t.colRadius || 0.3) + PLAYER_RADIUS + LANE_PAD;
+      if (Math.abs(lat) >= safe) continue;
+      const hit = Math.max(0, along - Math.sqrt(safe * safe - lat * lat));
       if (hit < block) block = hit;
     }
     return block;
   }
 
-  // Score the fan and return the best (delta, clearance) pair.
-  // Fast-path: if the straight-ahead lane is already CLEAR_AHEAD-clear, skip
-  // the scan and return delta=0. This is the whole point of the rewrite —
-  // the camera should hold its heading until something actually requires a
-  // turn, not constantly re-pick the marginally-best lane.
-  function evaluateProbes(world) {
-    const trees = world.getNearbyTrees(camera.position.x, camera.position.z, PROBE_RANGE + 4);
-    const straightClear = probeClearance(trees, Math.sin(heading), Math.cos(heading));
-    if (straightClear >= CLEAR_AHEAD) {
-      return { bestDelta: 0, bestClear: straightClear };
+  // Nearest blocker lateral sign: positive = tree is to the LEFT.
+  function findBlockerSide(trees, dx, dz, limit) {
+    let bestLat = 0, bestHit = limit, found = false;
+    for (const t of trees) {
+      const tx = t.x - camera.position.x;
+      const tz = t.z - camera.position.z;
+      const along = tx * dx + tz * dz;
+      if (along <= 0 || along > limit) continue;
+      const lat  = tx * dz - tz * dx;
+      const safe = (t.colRadius || 0.3) + PLAYER_RADIUS + LANE_PAD;
+      if (Math.abs(lat) >= safe) continue;
+      const hit = Math.max(0, along - Math.sqrt(safe * safe - lat * lat));
+      if (hit < bestHit) { bestHit = hit; bestLat = lat; found = true; }
     }
-    let bestScore = -Infinity;
-    let bestDelta = 0;
-    let bestClear = 0;
-    for (let i = 0; i < PROBE_COUNT; i++) {
-      const t = i / (PROBE_COUNT - 1);
-      const delta = -PROBE_HALF_FAN + 2 * PROBE_HALF_FAN * t;
-      const a = heading + delta;
-      const clear = probeClearance(trees, Math.sin(a), Math.cos(a));
-      const score = (clear / PROBE_RANGE) - STEER_COST_WT * Math.abs(delta) / PROBE_HALF_FAN;
-      if (score > bestScore) { bestScore = score; bestDelta = delta; bestClear = clear; }
-    }
-    return { bestDelta, bestClear };
+    return found ? bestLat : null;
   }
 
-  // Run once: full 360° pick so we never start facing a tree.
-  function bootstrapInitialHeading(world) {
-    const trees = world.getNearbyTrees(camera.position.x, camera.position.z, PROBE_RANGE + 4);
-    const N = 24;
-    let bestClear = -1;
-    let bestAngle = heading;
-    for (let i = 0; i < N; i++) {
-      const a = (i / N) * Math.PI * 2;
-      const clear = probeClearance(trees, Math.sin(a), Math.cos(a));
-      if (clear > bestClear) { bestClear = clear; bestAngle = a; }
+  // One-shot 360° scan: orient toward the roomiest opening.
+  function bootstrap(world) {
+    const trees = world.getNearbyTrees(camera.position.x, camera.position.z, SCAN_RANGE + 4);
+    let bestClear = -1, bestAngle = heading;
+    for (let i = 0; i < 24; i++) {
+      const a = (i / 24) * Math.PI * 2;
+      const c = fwdClearance(trees, Math.sin(a), Math.cos(a), SCAN_RANGE);
+      if (c > bestClear) { bestClear = c; bestAngle = a; }
     }
     heading = bestAngle;
-    deltaState = 0;
     yawRateState = 0;
   }
 
   function update(dt, world) {
     elapsed += dt;
+    if (!bootstrapped) { bootstrap(world); bootstrapped = true; }
 
-    if (!bootstrapped) {
-      bootstrapInitialHeading(world);
-      bootstrapped = true;
+    const fwdX  = Math.sin(heading);
+    const fwdZ  = Math.cos(heading);
+    const trees = world.getNearbyTrees(camera.position.x, camera.position.z, SCAN_RANGE + 4);
+    const clear = fwdClearance(trees, fwdX, fwdZ, SCAN_RANGE);
+
+    // ── State machine ─────────────────────────────────────────────────────
+    if (state === 'STRAIGHT') {
+      if (clear < TRIGGER_DIST) {
+        const lat = findBlockerSide(trees, fwdX, fwdZ, TRIGGER_DIST + 4);
+        // Tree on the left (lat > 0) → steer right (+1); tree on right → left (-1).
+        turnSide = lat !== null ? (lat >= 0 ? 1 : -1) : (Math.random() < 0.5 ? 1 : -1);
+        state = 'TURNING';
+      }
+    } else {
+      // Stay TURNING until forward is comfortably clear.
+      if (clear >= RELEASE_DIST) {
+        state    = 'STRAIGHT';
+        turnSide = 0;
+      }
     }
 
-    // ── Plan ────────────────────────────────────────────────────────────
-    const { bestDelta, bestClear } = evaluateProbes(world);
-
-    // ── Stage A: low-pass the desired angle ────────────────────────────
-    const kDelta = 1 - Math.exp(-DELTA_SLEW * dt);
-    deltaState += (bestDelta - deltaState) * kDelta;
-
-    // ── Stage B: convert smoothed angle → desired yaw rate, low-pass ──
-    // No drift term — when the planner says "go straight" (deltaState → 0)
-    // the yaw target is exactly 0 and the heading stays locked.
-    let yawTarget = deltaState * TURN_GAIN;
-    if (yawTarget >  YAW_RATE_CAP) yawTarget =  YAW_RATE_CAP;
-    if (yawTarget < -YAW_RATE_CAP) yawTarget = -YAW_RATE_CAP;
+    // ── Yaw rate (low-passed) ─────────────────────────────────────────────
     const kYaw = 1 - Math.exp(-YAW_SLEW * dt);
-    yawRateState += (yawTarget - yawRateState) * kYaw;
+    yawRateState += (turnSide * TURN_RATE - yawRateState) * kYaw;
     heading += yawRateState * dt;
 
-    // ── Brake target from chosen-lane clearance, low-passed ────────────
+    // ── Brake (low-passed) ────────────────────────────────────────────────
     let brakeTarget = 1;
-    if (bestClear < BRAKE_FREE_DIST) {
-      brakeTarget = BRAKE_MIN + (1 - BRAKE_MIN) * (bestClear / BRAKE_FREE_DIST);
+    if (clear < BRAKE_START) {
+      brakeTarget = BRAKE_MIN + (1 - BRAKE_MIN) * (clear / BRAKE_START);
     }
     const kBrake = 1 - Math.exp(-BRAKE_SLEW * dt);
     brakeState += (brakeTarget - brakeState) * kBrake;
 
-    // ── Velocity ──────────────────────────────────────────────────────
-    const cruise = FLOAT_SPEED * (1 + SPEED_VARY *
-                   Math.sin(phase.speed + elapsed * (2 * Math.PI / SPEED_PERIOD)));
+    // ── Velocity ──────────────────────────────────────────────────────────
+    const cruise = FLOAT_SPEED *
+      (1 + SPEED_VARY * Math.sin(phase.speed + elapsed * (2 * Math.PI / SPEED_PERIOD)));
     const speed = cruise * brakeState;
     const vx = Math.sin(heading) * speed;
     const vz = Math.cos(heading) * speed;
 
-    // ── Move + collision safety net ───────────────────────────────────
-    const nextX = camera.position.x + vx * dt;
-    const nextZ = camera.position.z + vz * dt;
-    const collTrees = world.getNearbyTrees(nextX, nextZ, PLAYER_RADIUS + 1);
-    const [rx, rz] = resolveCollisions(nextX, nextZ, PLAYER_RADIUS, collTrees);
+    // ── Move + collision safety net ───────────────────────────────────────
+    const nx = camera.position.x + vx * dt;
+    const nz = camera.position.z + vz * dt;
+    const ct = world.getNearbyTrees(nx, nz, PLAYER_RADIUS + 1);
+    const [rx, rz] = resolveCollisions(nx, nz, PLAYER_RADIUS, ct);
     camera.position.x = rx;
     camera.position.z = rz;
 
-    // ── Altitude ──────────────────────────────────────────────────────
+    // ── Altitude ──────────────────────────────────────────────────────────
     const h = HEIGHT_BASE
-            + 0.62 * HEIGHT_AMP * Math.sin(elapsed * (2 * Math.PI / HEIGHT_PERIOD_A))
-            + 0.38 * HEIGHT_AMP * Math.sin(elapsed * (2 * Math.PI / HEIGHT_PERIOD_B) + 1.7);
+      + 0.62 * HEIGHT_AMP * Math.sin(elapsed * (2 * Math.PI / HEIGHT_PERIOD_A))
+      + 0.38 * HEIGHT_AMP * Math.sin(elapsed * (2 * Math.PI / HEIGHT_PERIOD_B) + 1.7);
     camera.position.y = Math.max(HEIGHT_MIN, h);
 
-    // ── Look direction ────────────────────────────────────────────────
-    const lookYaw = heading + LOOK_YAW_AMP *
-                    Math.sin(phase.yaw + elapsed * (2 * Math.PI / LOOK_YAW_PERIOD));
-    const lookPitch = LOOK_PITCH_AMP *
-                      Math.sin(phase.pitch + elapsed * (2 * Math.PI / LOOK_PITCH_PERIOD));
+    // ── Look direction ────────────────────────────────────────────────────
+    const lookYaw = heading
+      + LOOK_YAW_AMP * Math.sin(phase.yaw + elapsed * (2 * Math.PI / LOOK_YAW_PERIOD));
+    const lookPitch = LOOK_PITCH_AMP
+      * Math.sin(phase.pitch + elapsed * (2 * Math.PI / LOOK_PITCH_PERIOD));
     tmpLook.set(
       camera.position.x + Math.sin(lookYaw) * LOOK_PROJ,
       camera.position.y + Math.tan(lookPitch) * LOOK_PROJ,
@@ -236,14 +190,7 @@ export function buildAutoExplorer(camera) {
     camera.lookAt(tmpLook);
   }
 
-  function dispose() { /* no listeners to clean up */ }
+  function dispose() {}
 
-  return {
-    controls: null,
-    update,
-    dispose,
-    EYE_HEIGHT: HEIGHT_BASE,
-    PLAYER_RADIUS,
-    isAuto: true,
-  };
+  return { controls: null, update, dispose, EYE_HEIGHT: HEIGHT_BASE, PLAYER_RADIUS, isAuto: true };
 }
