@@ -66,11 +66,13 @@ export function buildPipeline(renderer, scene, camera, preset) {
   const effects = [];
 
   // Bloom first — operates on raw HDR.
+  // High threshold (0.92+) keeps bloom strictly on overbright highlights so
+  // the image never burns out. The tier presets dial intensity to taste.
   if (preset.bloomEnabled) {
     effects.push(new BloomEffect({
-      intensity:          preset.bloomIntensity ?? 0.5,
-      luminanceThreshold: 0.82,
-      luminanceSmoothing: 0.35,
+      intensity:          preset.bloomIntensity ?? 0.2,
+      luminanceThreshold: preset.bloomThreshold ?? 0.92,
+      luminanceSmoothing: preset.bloomSmoothing ?? 0.15,
       kernelSize:         KERNEL_LOOKUP[preset.bloomKernel] ?? KernelSize.MEDIUM,
       mipmapBlur:         true,
     }));

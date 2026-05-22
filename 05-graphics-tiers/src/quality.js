@@ -12,6 +12,9 @@
 // where it matters. No global state.
 
 export const TIER_PRESETS = {
+  // Shared bloom tuning across tiers — only the kernel and intensity scale.
+  // Threshold 0.95 + tight smoothing keeps bloom OFF everything except real
+  // overbright highlights (sky through canopy, sun rim). No washed-out scene.
   low: {
     label: 'Low',
     sub:   'Phones / integrated GPU',
@@ -39,11 +42,15 @@ export const TIER_PRESETS = {
     fogNear:          5,
     fogFar:           22,
 
-    // Post-processing
+    // Post-processing — film grain and chromatic aberration intentionally
+    // OFF on every tier (user feedback: grain looks dirty, ChromAb burns
+    // the image). Bloom kept subtle so it never blows out the scene.
     dofEnabled:       false,
     bloomEnabled:     true,
     bloomKernel:      'SMALL',
-    bloomIntensity:   0.30,
+    bloomIntensity:   0.12,
+    bloomThreshold:   0.95,
+    bloomSmoothing:   0.15,
     chromAbEnabled:   false,
     grainEnabled:     false,
     vignetteOffset:   0.32,
@@ -61,7 +68,7 @@ export const TIER_PRESETS = {
 
     viewChunks:    4,
 
-    grassGridSide:    832,           // 832² ≈ 692k blades
+    grassGridSide:    832,
     grassCellSize:    0.05,
     grassEdgeFade:    0.90,
 
@@ -77,10 +84,11 @@ export const TIER_PRESETS = {
     dofResScale:      0.5,
     bloomEnabled:     true,
     bloomKernel:      'MEDIUM',
-    bloomIntensity:   0.45,
+    bloomIntensity:   0.18,
+    bloomThreshold:   0.94,
+    bloomSmoothing:   0.15,
     chromAbEnabled:   false,
-    grainEnabled:     true,
-    grainOpacity:     0.035,
+    grainEnabled:     false,
     vignetteOffset:   0.30,
     vignetteDarkness: 0.50,
   },
@@ -101,7 +109,7 @@ export const TIER_PRESETS = {
     grassEdgeFade:    0.92,
 
     leavesCountMult:  1.0,
-    treeCastShadow:   false,         // Even high keeps trees out of shadow pass
+    treeCastShadow:   false,
 
     dustCount:        320,
     fogNear:          5,
@@ -112,11 +120,11 @@ export const TIER_PRESETS = {
     dofResScale:      0.5,
     bloomEnabled:     true,
     bloomKernel:      'MEDIUM',
-    bloomIntensity:   0.55,
-    chromAbEnabled:   true,
-    chromAbOffset:    [0.0006, 0.0003],
-    grainEnabled:     true,
-    grainOpacity:     0.045,
+    bloomIntensity:   0.22,
+    bloomThreshold:   0.92,
+    bloomSmoothing:   0.18,
+    chromAbEnabled:   false,
+    grainEnabled:     false,
     vignetteOffset:   0.30,
     vignetteDarkness: 0.50,
   },
