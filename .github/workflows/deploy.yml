@@ -8,6 +8,7 @@ on:
       - '02-fps-infinite-forest/**'
       - '03-fps-experiment/**'
       - '04-post-processing/**'
+      - '05-graphics-tiers/**'
       - 'pages/**'
       - '.github/workflows/deploy.yml'
   workflow_dispatch:
@@ -58,15 +59,22 @@ jobs:
           npm ci
           npm run build
 
+      - name: Build 05
+        working-directory: 05-graphics-tiers
+        run: |
+          npm ci
+          npm run build
+
       # Combine all builds + landing page into one deploy artifact.
       - name: Assemble deploy directory
         run: |
           mkdir -p _site
           cp pages/index.html _site/index.html
-          cp -r 01-ez-tree-baseline/dist  _site/01
+          cp -r 01-ez-tree-baseline/dist    _site/01
           cp -r 02-fps-infinite-forest/dist _site/02
-          cp -r 03-fps-experiment/dist    _site/03
-          cp -r 04-post-processing/dist   _site/04
+          cp -r 03-fps-experiment/dist      _site/03
+          cp -r 04-post-processing/dist     _site/04
+          cp -r 05-graphics-tiers/dist      _site/05
           ls -la _site
 
       - uses: actions/configure-pages@v5
