@@ -1,0 +1,20 @@
+{
+  "name": "fractal-trees",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Procedural 3D trees with Three.js + EZ-Tree, following the Codrops Fractals-to-Forests tutorial.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@dgreenheck/ez-tree": "^1.1.0",
+    "lil-gui": "^0.19.2",
+    "three": "^0.170.0"
+  },
+  "devDependencies": {
+    "vite": "^5.4.0"
+  }
+}
