@@ -8,13 +8,16 @@
 //
 // Pipeline:
 //   RenderPass (HDR RGBA16F target)
-//     └─ EffectPass
+//     └─ EffectPass #1 (merged shader)
 //          ├─ DepthOfFieldEffect  — focus mid-forest, blur near/far
 //          ├─ BloomEffect         — soft glow on sky through canopy
 //          ├─ HueSaturationEffect — slight green/warmth boost
 //          ├─ BrightnessContrast  — gentle lift + contrast
 //          ├─ VignetteEffect      — darken edges for natural framing
+//          ├─ NoiseEffect         — film grain (cinematic grit)
 //          └─ SMAAEffect          — high-quality temporal AA
+//     └─ EffectPass #2 (separate — vertex shader required)
+//          └─ ChromaticAberrationEffect — subtle radial color fringing
 //
 // The composer is created with frameBufferType = HalfFloat so intermediate
 // targets hold HDR values. Bloom then actually brightens luminance > 1 (sky
@@ -34,6 +37,9 @@ import {
   VignetteEffect,
   HueSaturationEffect,
   BrightnessContrastEffect,
+  NoiseEffect,
+  ChromaticAberrationEffect,
+  BlendFunction,
 } from 'postprocessing';
 
 export function buildPipeline(renderer, scene, camera) {
@@ -74,15 +80,34 @@ export function buildPipeline(renderer, scene, camera) {
   // ── Vignette ──────────────────────────────────────────────────────────────
   const vignette = new VignetteEffect({ eskil: false, offset: 0.30, darkness: 0.50 });
 
+  // ── Chromatic aberration ──────────────────────────────────────────────────
+  // Tiny radial fringing — barely perceptible, just adds optical realism.
+  const chromAb = new ChromaticAberrationEffect({
+    offset:           new THREE.Vector2(0.0006, 0.0003),
+    radialModulation: true,
+    modulationOffset: 0.25,
+  });
+
+  // ── Film grain ────────────────────────────────────────────────────────────
+  // SCREEN blend: grain brightens highlights slightly (cinematic look).
+  // opacity on the BlendMode is the grain strength.
+  const grain = new NoiseEffect({ blendFunction: BlendFunction.SCREEN });
+  grain.blendMode.opacity.value = 0.045;
+
   // ── SMAA ──────────────────────────────────────────────────────────────────
   const smaa = new SMAAEffect({
     preset:            SMAAPreset.HIGH,
     edgeDetectionMode: EdgeDetectionMode.COLOR,
   });
 
-  // Single combined pass — all effects share one fragment shader invocation.
-  const effectPass = new EffectPass(camera, dof, bloom, hueSat, briCon, vignette, smaa);
+  // Main merged pass — all mergeable effects share one fragment shader.
+  const effectPass = new EffectPass(camera, dof, bloom, hueSat, briCon, vignette, grain, smaa);
   composer.addPass(effectPass);
+
+  // ChromaticAberrationEffect requires its own pass (it uses a vertex shader
+  // that cannot be merged with the others in the postprocessing library).
+  const chromPass = new EffectPass(camera, chromAb);
+  composer.addPass(chromPass);
 
   function resize() {
     const w = renderer.domElement.clientWidth  || window.innerWidth;

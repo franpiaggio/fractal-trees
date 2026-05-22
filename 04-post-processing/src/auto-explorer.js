@@ -43,7 +43,7 @@ const BRAKE_START = 8;
 const BRAKE_MIN   = 0.32;
 const BRAKE_SLEW  = 1.5;
 
-// ── Altitude / roll / look ────────────────────────────────────────────────
+// ── Altitude / look ───────────────────────────────────────────────────────
 // All oscillations driven by GSAP tweens on an `animated` object so the
 // easing curves (power2.inOut, sine.inOut) give the motion a weightless,
 // floaty quality rather than the mechanical feel of raw sines.
@@ -77,9 +77,9 @@ export function buildAutoExplorer(camera, scene) {
   // ── GSAP-driven animated values ───────────────────────────────────────────
   // GSAP updates these each RAF tick; the game loop reads them.
   // power2.inOut on height feels like buoyancy — slows at peaks/troughs.
-  // sine.inOut on roll gives a gentle "riding a wave" banking.
   // speedBreath is a subtle inhale/exhale in forward speed.
-  const animated = { heightOffset: 0, roll: 0, speedBreath: 1.0 };
+  // NOTE: no roll / tilt anywhere — the horizon stays level always.
+  const animated = { heightOffset: 0, speedBreath: 1.0 };
 
   const _tweens = [
     gsap.to(animated, {
@@ -88,14 +88,6 @@ export function buildAutoExplorer(camera, scene) {
       ease: 'power2.inOut',
       repeat: -1,
       yoyo: true,
-    }),
-    gsap.to(animated, {
-      roll: 0.022,             // ~1.3° — subtle banking
-      duration: 11,
-      ease: 'sine.inOut',
-      repeat: -1,
-      yoyo: true,
-      delay: 2.5,              // offset so roll and height don't peak together
     }),
     gsap.to(animated, {
       speedBreath: 1.10,
@@ -247,11 +239,7 @@ export function buildAutoExplorer(camera, scene) {
       camera.position.z + Math.cos(lookYaw) * LOOK_PROJ,
     );
     camera.lookAt(tmpLook);
-    // Banking roll applied AFTER lookAt so it's in camera local space.
-    // Positive roll tilts horizon left (banking right), and vice versa.
-    // We add a subtle extra tilt while TURNING so avoidance feels physical.
-    const turningLean = turnSide * 0.015;  // lean into the turn
-    camera.rotateZ(animated.roll + turningLean);
+    // NO roll / tilt. Horizon stays perfectly level — user wants zero shake.
   }
 
   function dispose() {

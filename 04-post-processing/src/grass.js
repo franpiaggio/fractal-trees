@@ -69,16 +69,16 @@ function buildGrassMaterial(uniforms, opts) {
     Object.assign(shader.uniforms, uniforms);
 
     shader.vertexShader = `
-      // Shared with the leaf shader — updated together by wind.js / updateWind().
       uniform float uTime;
-      uniform vec3  uWindStrength;       // xz used as bend direction & magnitude
+      uniform vec3  uWindStrength;
       uniform float uWindFrequency;
-      uniform float uWindScale;          // metres per spatial-noise cycle
-      // Grass-local:
-      uniform float uWindBend;           // scales the shared wind for short blades
+      uniform float uWindScale;
+      uniform float uWindBend;
       uniform vec2  uPlayerCell;
       varying float vBladeY;
       varying float vRandom;
+      varying float vPatchDry;   // 0=lush, 1=dry — spatial color zone
+      varying float vPatchDark;  // 0=bright, 1=shadowed patch
       const float gridSide = ${opts.gridSide.toFixed(1)};
       const float cellSize = ${opts.cellSize.toFixed(4)};
 
@@ -87,10 +87,6 @@ function buildGrassMaterial(uniforms, opts) {
         return fract(sin(p) * 43758.5453);
       }
 
-      // Smooth 2D value noise → equivalent to a 2D simplex for our purposes
-      // (the leaves use simplex3 over instance-world XYZ; grass blades sit on
-      // y=0, so a 2D noise over XZ produces the same kind of spatial gust
-      // field). Cheaper than the full simplex3 chunk EZ-Tree embeds.
       float vnoise(vec2 p) {
         vec2 i = floor(p);
         vec2 f = fract(p);
@@ -124,7 +120,18 @@ function buildGrassMaterial(uniforms, opts) {
         float patchHalf = gridSide * 0.5;
         float gT = length(gWorldCell - uPlayerCell) / patchHalf;
         float gEdgeFade = 1.0 - smoothstep(${opts.edgeFadeStart.toFixed(3)}, 1.0, gT);
-        float gScale = (0.88 + gH2.x * 0.22) * gEdgeFade;
+
+        // Spatial color patches: two overlapping low-frequency noise layers.
+        // patchDry  — slow ~18m cycle: yellow-brown dry streaks.
+        // patchDark — slightly faster ~11m cycle: dim shadowed hollows.
+        float patchDryRaw  = vnoise(gWorldXZ * 0.056);
+        float patchDarkRaw = vnoise(gWorldXZ * 0.091 + vec2(42.3, 17.7));
+        vPatchDry  = smoothstep(0.42, 0.68, patchDryRaw);
+        vPatchDark = smoothstep(0.50, 0.75, patchDarkRaw) * 0.55;
+
+        // Height modulation: dry patches shorter, lush patches taller.
+        float heightMod = 1.0 - vPatchDry * 0.25;
+        float gScale = (0.88 + gH2.x * 0.22) * gEdgeFade * heightMod;
 
         vec3 _on = objectNormal;
         objectNormal.x = gCos * _on.x - gSin * _on.z;
@@ -142,17 +149,12 @@ function buildGrassMaterial(uniforms, opts) {
         transformed.x = _tx;
         transformed.z = _tz;
 
-        // Wind, matched to the leaf shader's formula:
-        //   • simplex/value-noise sample of world position → per-spot phase
-        //   • 3 sines at non-integer frequency ratios (0.5 / 0.3 / 0.2 weights)
-        //   • driven by *shared* uTime / uWindStrength / uWindFrequency / uWindScale
         float windOffset = 2.0 * 3.14159265 *
                            (vnoise(gWorldXZ / uWindScale) * 2.0 - 1.0);
         float windPhase = uTime * uWindFrequency;
         float windSum = 0.5 * sin(      windPhase + windOffset       )
                       + 0.3 * sin(2.0 * windPhase + 1.3 * windOffset )
                       + 0.2 * sin(5.0 * windPhase + 1.5 * windOffset );
-        // Bend grows with uv.y² so tips move most, base stays planted.
         float bend = uv.y * uv.y * uWindBend;
         transformed.x += windSum * bend * uWindStrength.x;
         transformed.z += windSum * bend * uWindStrength.z;
@@ -167,13 +169,26 @@ function buildGrassMaterial(uniforms, opts) {
       uniform vec3 uBaseColor;
       varying float vBladeY;
       varying float vRandom;
+      varying float vPatchDry;
+      varying float vPatchDark;
     ` + shader.fragmentShader;
 
     shader.fragmentShader = shader.fragmentShader.replace(
       'vec4 diffuseColor = vec4( diffuse, opacity );',
       /* glsl */ `
-      vec3 grassCol = mix(uBaseColor, uTipColor, vBladeY * vBladeY);
-      grassCol *= 0.85 + vRandom * 0.30;
+      // Dry patch: yellowish tips, brownish base
+      vec3 dryTip  = vec3(0.76, 0.72, 0.30);
+      vec3 dryBase = vec3(0.40, 0.30, 0.12);
+      vec3 tip  = mix(uTipColor,  dryTip,  vPatchDry * 0.65);
+      vec3 base = mix(uBaseColor, dryBase, vPatchDry * 0.55);
+
+      float t = vBladeY * vBladeY;
+      vec3 grassCol = mix(base, tip, t);
+
+      // Per-blade brightness jitter + shadow-hollow darkening
+      float brightness = 0.80 + vRandom * 0.32 - vPatchDark * 0.28;
+      grassCol *= brightness;
+
       vec4 diffuseColor = vec4(grassCol, opacity);`
     );
 

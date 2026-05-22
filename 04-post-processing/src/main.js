@@ -7,6 +7,7 @@ import { buildPlayer }        from './player.js';
 import { buildAutoExplorer }  from './auto-explorer.js';
 import { buildGrass }         from './grass.js';
 import { buildPipeline }      from './postprocessing.js';
+import { buildDust }          from './dust.js';
 import { updateWind }         from './wind.js';
 
 const appEl = document.getElementById('app');
@@ -68,6 +69,7 @@ const grass = buildGrass(scene, {
 });
 
 const post = buildPipeline(renderer, scene, camera);
+const dust = buildDust(scene);
 
 // `explorer` is the currently-active camera controller. It starts null — no
 // controller runs while the mode-picker overlay is visible — and is built (or
@@ -168,6 +170,7 @@ renderer.setAnimationLoop(() => {
 
   grass.update(camera);
   grass.setTime(t);
+  dust.update(camera, t);
   env.updateSun(camera.position);
   updateWind(t);
 
