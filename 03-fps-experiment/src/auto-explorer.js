@@ -43,31 +43,35 @@ const SPEED_VARY    = 0.10;
 const SPEED_PERIOD  = 21;
 
 // ── Planning-based avoidance ───────────────────────────────────────────────
-// No procedural drift: heading stays locked unless the planner actually sees
-// a tree blocking the straight-ahead lane. The "go straight" branch returns
-// bestDelta = 0 without even scanning the fan, so deltaState relaxes to 0
-// and the camera holds course.
-const PROBE_COUNT     = 13;            // odd → straight-ahead always sampled
-const PROBE_HALF_FAN  = Math.PI / 2;   // ± 90°  — wide enough to find any escape
-const PROBE_RANGE     = 28;            // m — plan ~ 11 s ahead at cruise
-const PROBE_LANE_PAD  = 2.2;           // m — required lateral clearance on top of trunk+player
-const CLEAR_AHEAD     = 18;            // m — straight clearance ≥ this → hold heading, no scan
-const STEER_COST_WT   = 0.08;          // how much to prefer "less turn" when clearance ties
-const TURN_GAIN       = 1.3;           // rad/s per rad of bestDelta (before slewing)
-const YAW_RATE_CAP    = 0.85;          // rad/s — hard cap (~ 49°/s) — only hit in tight clusters
+// The camera holds its heading completely until a tree is *close* in the
+// straight-ahead lane. Far trees are ignored — they'll either resolve
+// themselves as we approach or we'll start turning later. When we do turn,
+// it's at a deliberately low rate: ≤ 0.30 rad/s (≈ 17°/s) before smoothing.
+// Combined with the brake, this gives ample lateral clearance over a long,
+// slow arc rather than a sharp swerve.
+const PROBE_COUNT     = 11;            // odd → straight-ahead always sampled
+const PROBE_HALF_FAN  = Math.PI / 2;   // ± 90°  — needed only to find escapes from corners
+const PROBE_RANGE     = 22;            // m — probe range (only used when actually scanning)
+const PROBE_LANE_PAD  = 2.2;           // m — lateral clearance margin on top of trunk + player
+const CLEAR_AHEAD     = 10;            // m — straight clearance ≥ this → hold heading, no scan
+const STEER_COST_WT   = 0.18;          // strong "prefer less turn" — beats marginal lane wins
+const TURN_GAIN       = 0.55;          // rad/s per rad of bestDelta (gentle conversion)
+const YAW_RATE_CAP    = 0.30;          // rad/s — hard cap (~ 17°/s) — never feels abrupt
 
 // ── Brake (only when chosen lane's clearance is short) ─────────────────────
-const BRAKE_FREE_DIST = 14;            // m — full speed beyond this
-const BRAKE_MIN       = 0.40;          // ratio when at near-zero clearance
+// Triggers at the same distance as the turn — they ramp in together so the
+// camera both slows down and steers, giving the turn more time to complete.
+const BRAKE_FREE_DIST = 10;            // m — full speed beyond this
+const BRAKE_MIN       = 0.30;          // ratio when nearly at the trunk
 
 // ── Two-stage smoothing — both filters are first-order low-pass ────────────
-// Stage A smooths the *target angle* coming out of the probe scorer.
-// Stage B smooths the *yaw rate* before it integrates into heading.
-// Cascading gives a more rounded response than a single pole — no step at
-// any point in the pipeline.
-const DELTA_SLEW = 1.5;                // 1/s — τ ≈ 0.67 s
-const YAW_SLEW   = 3.0;                // 1/s — τ ≈ 0.33 s
-const BRAKE_SLEW = 2.3;                // 1/s — τ ≈ 0.43 s
+// Time constants are deliberately long: ~ 1.1 s on the desired-angle filter,
+// ~ 0.55 s on the yaw-rate filter. Combined response ≈ 1.65 s, so even when
+// the planner suddenly says "turn 90°", the camera eases into that turn
+// over a couple seconds. With CLEAR_AHEAD = 10 m and braking, this is safe.
+const DELTA_SLEW = 0.9;                // 1/s — τ ≈ 1.1 s on desired angle
+const YAW_SLEW   = 1.8;                // 1/s — τ ≈ 0.55 s on yaw rate
+const BRAKE_SLEW = 1.6;                // 1/s — τ ≈ 0.63 s on brake
 
 // ── Altitude ───────────────────────────────────────────────────────────────
 const HEIGHT_BASE      = 3.0;
