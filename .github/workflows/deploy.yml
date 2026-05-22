@@ -1,10 +1,14 @@
-name: Deploy v03 to GitHub Pages
+name: Deploy all versions to GitHub Pages
 
 on:
   push:
     branches: [main]
     paths:
+      - '01-ez-tree-baseline/**'
+      - '02-fps-infinite-forest/**'
       - '03-fps-experiment/**'
+      - '04-post-processing/**'
+      - 'pages/**'
       - '.github/workflows/deploy.yml'
   workflow_dispatch:
 
@@ -13,7 +17,6 @@ permissions:
   pages: write
   id-token: write
 
-# Only one Pages deploy at a time; cancel any in-flight if a new push arrives.
 concurrency:
   group: pages
   cancel-in-progress: true
@@ -21,22 +24,55 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: 03-fps-experiment
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: npm
-          cache-dependency-path: 03-fps-experiment/package-lock.json
-      - run: npm ci
-      - run: npm run build
+
+      # Build each version into its own subdirectory of the deploy artifact.
+      # Each version's vite config has `base: /fractal-trees/<n>/` so asset URLs
+      # resolve correctly under the Pages subpath.
+      - name: Build 01
+        working-directory: 01-ez-tree-baseline
+        run: |
+          npm ci
+          npm run build
+
+      - name: Build 02
+        working-directory: 02-fps-infinite-forest
+        run: |
+          npm ci
+          npm run build
+
+      - name: Build 03
+        working-directory: 03-fps-experiment
+        run: |
+          npm ci
+          npm run build
+
+      - name: Build 04
+        working-directory: 04-post-processing
+        run: |
+          npm ci
+          npm run build
+
+      # Combine all builds + landing page into one deploy artifact.
+      - name: Assemble deploy directory
+        run: |
+          mkdir -p _site
+          cp pages/index.html _site/index.html
+          cp -r 01-ez-tree-baseline/dist  _site/01
+          cp -r 02-fps-infinite-forest/dist _site/02
+          cp -r 03-fps-experiment/dist    _site/03
+          cp -r 04-post-processing/dist   _site/04
+          ls -la _site
+
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: 03-fps-experiment/dist
+          path: _site
 
   deploy:
     needs: build

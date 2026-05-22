@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Fractal Trees — Three.js experiments</title>
+    <style>
+      :root { color-scheme: dark; }
+      html, body { margin: 0; min-height: 100%; background: #0a0d11; }
+      body {
+        font-family: ui-monospace, Menlo, Consolas, monospace;
+        color: #cfd5dc;
+        display: flex; align-items: center; justify-content: center;
+        padding: 40px 20px;
+      }
+      .wrap { max-width: 720px; width: 100%; }
+      h1 { font-size: 22px; letter-spacing: 0.04em; margin: 0 0 6px; }
+      .sub { color: #6f7a83; font-size: 12px; letter-spacing: 0.06em;
+             text-transform: uppercase; margin: 0 0 28px; }
+      .grid { display: grid; grid-template-columns: 1fr; gap: 12px; }
+      a.card {
+        display: block; padding: 18px 20px; text-decoration: none;
+        border-radius: 10px; background: rgba(35,44,52,0.7);
+        border: 1px solid rgba(255,255,255,0.06); color: inherit;
+        transition: background .12s ease, border-color .12s ease, transform .12s ease;
+      }
+      a.card:hover {
+        background: rgba(48,60,70,0.9);
+        border-color: rgba(255,212,130,0.35);
+        transform: translateY(-1px);
+      }
+      .ver { color: #ffd482; font-size: 13px; letter-spacing: 0.06em;
+             margin-bottom: 4px; }
+      .title { font-size: 15px; margin-bottom: 4px; }
+      .desc { color: #b9c2cb; font-size: 12px; line-height: 1.55; }
+      .foot { margin-top: 32px; color: #6f7a83; font-size: 11px;
+              letter-spacing: 0.05em; }
+      a.repo { color: #9aa6b0; text-decoration: underline; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <h1>Fractal Trees</h1>
+      <p class="sub">Three.js experiments · iterations 01 → 04</p>
+      <div class="grid">
+        <a class="card" href="./01/">
+          <div class="ver">01 — Baseline</div>
+          <div class="title">EZ-Tree single hero</div>
+          <div class="desc">A single procedural tree with OrbitControls. The starting point — gets the asset pipeline, lighting, and color management working.</div>
+        </a>
+        <a class="card" href="./02/">
+          <div class="ver">02 — Infinite Forest</div>
+          <div class="title">Streaming FPS world</div>
+          <div class="desc">First-person walk through an endless forest. Chunked streaming, instanced trees, shared wind, real grass.</div>
+        </a>
+        <a class="card" href="./03/">
+          <div class="ver">03 — FPS Experiment</div>
+          <div class="title">Free + auto explore</div>
+          <div class="desc">Adds a cinematic auto-explore mode. State-machine avoidance, GSAP-driven buoyancy, ultra-dense grass, mode picker.</div>
+        </a>
+        <a class="card" href="./04/">
+          <div class="ver">04 — Post Processing</div>
+          <div class="title">HDR cinematic pipeline</div>
+          <div class="desc">DoF, bloom, vignette, film grain, chromatic aberration. Spatial grass variation. World-space dust motes.</div>
+        </a>
+      </div>
+      <p class="foot">source · <a class="repo" href="https://github.com/franpiaggio/fractal-trees">github.com/franpiaggio/fractal-trees</a></p>
+    </div>
+  </body>
+</html>
