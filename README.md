@@ -18,7 +18,8 @@ every version.
 | ----- | ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------- |
 | **01** | `01-ez-tree-baseline/`      | Drop-in library: `@dgreenheck/ez-tree` does the procedural work for us. Hero + small instanced background forest, orbit camera.                                | Vite + vanilla JS + Three.js |
 | **02** | `02-fps-infinite-forest/`   | First-person walk + sprint through a chunk-streamed, FOV-culled, instanced forest with tree collisions, procedural ground, and a single-`InstancedMesh` fluffy grass carpet (~518k blades) tucked into atmospheric fog.   | Vite + vanilla JS + Three.js |
-| 03    | _(future)_                   | …                                                                                                                                                              |                              |
+| **03** | `03-fps-experiment/`        | Verbatim fork of 02 as a base to iterate on. Divergence is tracked in its own README. Runs on port 5175 so it can coexist with 02.                              | Vite + vanilla JS + Three.js |
+| 04    | _(future)_                   | …                                                                                                                                                              |                              |
 
 To run any version: `cd <folder> && npm install && npm run dev`.
 

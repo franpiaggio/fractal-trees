@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+    <title>03 · FPS experiment</title>
+    <style>
+      :root { color-scheme: dark; }
+      html, body { margin: 0; height: 100%; background: #0a0d11; overflow: hidden; }
+      body { font-family: ui-monospace, Menlo, Consolas, monospace; color: #cfd5dc; }
+      #app { position: fixed; inset: 0; }
+      #app canvas { display: block; width: 100%; height: 100%; }
+      #crosshair {
+        position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
+        width: 6px; height: 6px; border-radius: 50%;
+        background: rgba(255,255,255,0.55); pointer-events: none;
+        box-shadow: 0 0 0 1px rgba(0,0,0,0.4);
+      }
+      #overlay {
+        position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+        background: rgba(8, 11, 14, 0.78); backdrop-filter: blur(4px);
+        user-select: none; transition: opacity .25s ease;
+      }
+      #overlay.hidden { opacity: 0; pointer-events: none; }
+      #overlay .card {
+        max-width: 560px; padding: 28px 32px 26px; border-radius: 14px;
+        background: rgba(20,26,32,0.94); border: 1px solid rgba(255,255,255,0.08);
+        text-align: center; line-height: 1.55;
+      }
+      #overlay h1 { margin: 0 0 4px; font-size: 18px; letter-spacing: 0.04em; }
+      #overlay .sub { margin: 0 0 22px; color: #6f7a83; font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; }
+      #overlay .modes { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+      #overlay .mode {
+        display: flex; flex-direction: column; align-items: stretch; text-align: left;
+        padding: 18px 18px 16px; border-radius: 10px; cursor: pointer;
+        background: rgba(35,44,52,0.7); border: 1px solid rgba(255,255,255,0.06);
+        transition: background .12s ease, border-color .12s ease, transform .12s ease;
+        font-family: inherit; color: inherit; font-size: inherit;
+      }
+      #overlay .mode:hover { background: rgba(48,60,70,0.85); border-color: rgba(255,212,130,0.35); transform: translateY(-1px); }
+      #overlay .mode:focus-visible { outline: 2px solid #ffd482; outline-offset: 2px; }
+      #overlay .mode .title { color: #ffd482; font-size: 14px; letter-spacing: 0.06em; margin-bottom: 6px; }
+      #overlay .mode .desc  { color: #b9c2cb; font-size: 12px; line-height: 1.5; }
+      #overlay .mode .keys  { margin-top: 12px; color: #7d8893; font-size: 11px; line-height: 1.7; }
+      #overlay kbd {
+        background: #1c232a; border: 1px solid #2a323a; padding: 1px 6px;
+        border-radius: 4px; font-size: 11px; color: #e2e8ee;
+      }
+      #overlay .hint { margin-top: 18px; color: #6f7a83; font-size: 11px; letter-spacing: 0.06em; }
+      #hud {
+        position: fixed; left: 10px; bottom: 10px;
+        font-size: 11px; color: #9aa6b0; pointer-events: none;
+        background: rgba(8,11,14,0.45); padding: 6px 10px; border-radius: 6px;
+        border: 1px solid rgba(255,255,255,0.05);
+        font-variant-numeric: tabular-nums;
+      }
+      /* Auto-explore mode: pure cinematic — no crosshair, no HUD, no input. */
+      body.auto-mode #crosshair { display: none; }
+      body.auto-mode #hud { display: none; }
+      #auto-hint {
+        position: fixed; left: 50%; bottom: 36px; transform: translateX(-50%);
+        font-size: 11px; letter-spacing: 0.14em; color: rgba(255,255,255,0.7);
+        text-transform: uppercase; pointer-events: none;
+        opacity: 0; transition: opacity 1.2s ease;
+        text-shadow: 0 1px 3px rgba(0,0,0,0.6);
+      }
+      #auto-hint kbd {
+        background: rgba(28,35,42,0.85); border: 1px solid rgba(255,255,255,0.18);
+        padding: 1px 6px; border-radius: 4px; font-size: 11px; color: #f0f4f8;
+      }
+      body.auto-mode #auto-hint.show { opacity: 1; }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <div id="crosshair"></div>
+    <div id="hud"><span id="stats">initializing…</span></div>
+    <div id="auto-hint">press <kbd>Esc</kbd> to return</div>
+    <div id="overlay">
+      <div class="card">
+        <h1>Infinite forest</h1>
+        <p class="sub">choose a mode</p>
+        <div class="modes">
+          <button class="mode" id="mode-free" type="button">
+            <span class="title">Free Explore</span>
+            <span class="desc">First-person walk. You control the camera, dodge the trees, set your own pace.</span>
+            <span class="keys">
+              Move <kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> &nbsp; Run <kbd>Shift</kbd><br/>
+              Look mouse &nbsp;or&nbsp; <kbd>←</kbd> <kbd>↑</kbd> <kbd>↓</kbd> <kbd>→</kbd>
+            </span>
+          </button>
+          <button class="mode" id="mode-auto" type="button">
+            <span class="title">Auto Explore</span>
+            <span class="desc">Floating cinematic flythrough. The camera wanders the forest, drifts in altitude, looks around on its own.</span>
+            <span class="keys">No input · press <kbd>Esc</kbd> to return here</span>
+          </button>
+        </div>
+        <p class="hint">world streams infinitely · trees, grass, and wind all share one driver</p>
+      </div>
+    </div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
