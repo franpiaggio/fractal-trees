@@ -167,7 +167,7 @@ export function buildAutoExplorer(camera) {
     const nx = camera.position.x + vx * dt;
     const nz = camera.position.z + vz * dt;
     const ct = world.getNearbyTrees(nx, nz, PLAYER_RADIUS + 1);
-    const [rx, rz] = resolveCollisions(nx, nz, PLAYER_RADIUS, ct);
+    const { pos: [rx, rz] } = resolveCollisions(nx, nz, PLAYER_RADIUS, ct);
     camera.position.x = rx;
     camera.position.z = rz;
 
