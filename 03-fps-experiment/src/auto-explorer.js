@@ -42,19 +42,16 @@ const FLOAT_SPEED   = 2.5;          // m/s — calm forward intent (+30 % over o
 const SPEED_VARY    = 0.10;
 const SPEED_PERIOD  = 21;
 
-// ── Smooth meander (drift) ─────────────────────────────────────────────────
-// Sum of three slow sines → C∞ heading; peak yaw-rate contribution Σ amp·freq.
-const YAW_DRIFT = [
-  { amp: 0.55, freq: 0.038, phase: 1.2 },
-  { amp: 0.40, freq: 0.069, phase: 2.7 },
-  { amp: 0.25, freq: 0.113, phase: 4.4 },
-];
-
 // ── Planning-based avoidance ───────────────────────────────────────────────
+// No procedural drift: heading stays locked unless the planner actually sees
+// a tree blocking the straight-ahead lane. The "go straight" branch returns
+// bestDelta = 0 without even scanning the fan, so deltaState relaxes to 0
+// and the camera holds course.
 const PROBE_COUNT     = 13;            // odd → straight-ahead always sampled
 const PROBE_HALF_FAN  = Math.PI / 2;   // ± 90°  — wide enough to find any escape
 const PROBE_RANGE     = 28;            // m — plan ~ 11 s ahead at cruise
 const PROBE_LANE_PAD  = 2.2;           // m — required lateral clearance on top of trunk+player
+const CLEAR_AHEAD     = 18;            // m — straight clearance ≥ this → hold heading, no scan
 const STEER_COST_WT   = 0.08;          // how much to prefer "less turn" when clearance ties
 const TURN_GAIN       = 1.3;           // rad/s per rad of bestDelta (before slewing)
 const YAW_RATE_CAP    = 0.85;          // rad/s — hard cap (~ 49°/s) — only hit in tight clusters
@@ -90,7 +87,6 @@ export function buildAutoExplorer(camera) {
   camera.position.set(0, HEIGHT_BASE, 0);
 
   let elapsed = 0;
-  const t0 = Math.random() * 1000;
   let heading = Math.random() * Math.PI * 2;
 
   // Filter state — both stages start coherent with their inputs.
@@ -105,13 +101,6 @@ export function buildAutoExplorer(camera) {
     speed: Math.random() * Math.PI * 2,
   };
   const tmpLook = new THREE.Vector3();
-
-  // Continuous drift's exact derivative.
-  function smoothDriftRate(time) {
-    let r = 0;
-    for (const c of YAW_DRIFT) r += c.amp * c.freq * Math.cos(c.freq * time + c.phase);
-    return r;
-  }
 
   // Distance the player corridor can travel along (dx, dz) before clipping a tree.
   // Closed-form ray-vs-cylinder: along-axis distance to the cylinder's first hit.
@@ -136,8 +125,16 @@ export function buildAutoExplorer(camera) {
   }
 
   // Score the fan and return the best (delta, clearance) pair.
+  // Fast-path: if the straight-ahead lane is already CLEAR_AHEAD-clear, skip
+  // the scan and return delta=0. This is the whole point of the rewrite —
+  // the camera should hold its heading until something actually requires a
+  // turn, not constantly re-pick the marginally-best lane.
   function evaluateProbes(world) {
     const trees = world.getNearbyTrees(camera.position.x, camera.position.z, PROBE_RANGE + 4);
+    const straightClear = probeClearance(trees, Math.sin(heading), Math.cos(heading));
+    if (straightClear >= CLEAR_AHEAD) {
+      return { bestDelta: 0, bestClear: straightClear };
+    }
     let bestScore = -Infinity;
     let bestDelta = 0;
     let bestClear = 0;
@@ -184,8 +181,9 @@ export function buildAutoExplorer(camera) {
     deltaState += (bestDelta - deltaState) * kDelta;
 
     // ── Stage B: convert smoothed angle → desired yaw rate, low-pass ──
-    const driftRate = smoothDriftRate(elapsed + t0);
-    let yawTarget = driftRate + deltaState * TURN_GAIN;
+    // No drift term — when the planner says "go straight" (deltaState → 0)
+    // the yaw target is exactly 0 and the heading stays locked.
+    let yawTarget = deltaState * TURN_GAIN;
     if (yawTarget >  YAW_RATE_CAP) yawTarget =  YAW_RATE_CAP;
     if (yawTarget < -YAW_RATE_CAP) yawTarget = -YAW_RATE_CAP;
     const kYaw = 1 - Math.exp(-YAW_SLEW * dt);
