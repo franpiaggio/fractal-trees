@@ -22,16 +22,17 @@ const renderer = new THREE.WebGLRenderer({
   powerPreference: 'high-performance',
   stencil: false,
 });
-// Cap DPR at 1.25. Retina (DPR 2) was burning the fragment budget; SSAO and
-// Bloom have been removed entirely (see postprocessing.js), so 1.25 + SMAA
-// produces a clean image without the look-up-at-the-sky crash.
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.25));
+// v04: cap DPR at 1.0 since DoF + Bloom already fill the fragment budget.
+// The postprocessing composer renders into a HalfFloat HDR target so tone
+// mapping must be disabled on the renderer itself (the composer handles it).
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.0));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.35;
+// PCFShadowMap (no Soft) cuts shadow cost ~40% — still looks good at distance.
 renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.shadowMap.type = THREE.PCFShadowMap;
 appEl.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
@@ -169,6 +170,9 @@ renderer.setAnimationLoop(() => {
   grass.setTime(t);
   env.updateSun(camera.position);
   updateWind(t);
+
+  // Update DoF world focus — auto mode focuses 9 m ahead, free mode 6 m.
+  if (post.setFocusTarget) post.setFocusTarget(explorer?.isAuto ? 9 : 6);
 
   post.composer.render();
   frameCount++;

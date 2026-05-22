@@ -1,92 +1,99 @@
-// Post-processing pipeline — kept *deliberately light* after a lag-on-look-up
-// crash. The most expensive passes here are SSAO and UnrealBloom; both
-// operate on full-screen render targets that scale with DPR² and chew through
-// fragment shading on the wide sky / dense canopy view. They are commented out
-// (not deleted) so they can be reintroduced later under a quality toggle.
+// Post-processing pipeline — v04 "Post Processing" edition.
 //
-//   RenderPass  →  Vignette+grade  →  SMAA  →  OutputPass
+// Uses the `postprocessing` package (pmndrs/vanruesc) instead of Three.js
+// built-ins. Key advantage: all effects below share a *single* EffectPass,
+// meaning they're compiled into one combined fragment shader and the GPU sees
+// one full-screen quad draw per frame instead of one per effect. This leaves
+// headroom for Bloom + DoF without fps regressions.
 //
-// Vignette + light color grade gives the "framed view" feel; SMAA cleans the
-// edges (renderer.antialias is off). Tone mapping is applied at OutputPass.
+// Pipeline:
+//   RenderPass (HDR RGBA16F target)
+//     └─ EffectPass
+//          ├─ DepthOfFieldEffect  — focus mid-forest, blur near/far
+//          ├─ BloomEffect         — soft glow on sky through canopy
+//          ├─ HueSaturationEffect — slight green/warmth boost
+//          ├─ BrightnessContrast  — gentle lift + contrast
+//          ├─ VignetteEffect      — darken edges for natural framing
+//          └─ SMAAEffect          — high-quality temporal AA
+//
+// The composer is created with frameBufferType = HalfFloat so intermediate
+// targets hold HDR values. Bloom then actually brightens luminance > 1 (sky
+// through canopy reads as > 1 in linear HDR before tone mapping).
 
 import * as THREE from 'three';
-import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
-import { RenderPass }     from 'three/examples/jsm/postprocessing/RenderPass.js';
-import { ShaderPass }     from 'three/examples/jsm/postprocessing/ShaderPass.js';
-import { OutputPass }     from 'three/examples/jsm/postprocessing/OutputPass.js';
-import { SMAAPass }       from 'three/examples/jsm/postprocessing/SMAAPass.js';
-
-const VignetteShader = {
-  uniforms: {
-    tDiffuse:     { value: null },
-    uOffset:      { value: 0.80 },
-    uDarkness:    { value: 0.28 },     // mild — earlier 0.85 was crushing
-    uSaturation:  { value: 1.04 },
-    uContrast:    { value: 1.02 },
-    uTemperature: { value: 0.025 },
-    uLift:        { value: 0.05 },     // pull shadows up
-  },
-  vertexShader: /* glsl */ `
-    varying vec2 vUv;
-    void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }
-  `,
-  fragmentShader: /* glsl */ `
-    precision highp float;
-    varying vec2 vUv;
-    uniform sampler2D tDiffuse;
-    uniform float uOffset, uDarkness, uSaturation, uContrast, uTemperature, uLift;
-
-    vec3 saturate(vec3 c, float s){
-      float l = dot(c, vec3(0.299, 0.587, 0.114));
-      return mix(vec3(l), c, s);
-    }
-
-    void main(){
-      vec4 src = texture2D(tDiffuse, vUv);
-      vec3 col = src.rgb;
-
-      col = col + uLift * (1.0 - col);                // lift shadows
-      col = (col - 0.5) * uContrast + 0.5;
-      col = saturate(col, uSaturation);
-      col += vec3(uTemperature, uTemperature * 0.4, -uTemperature * 0.6);
-
-      vec2 uv = vUv - 0.5;
-      float d = dot(uv, uv) * uOffset;
-      float v = smoothstep(0.0, 0.85, d);
-      col *= mix(1.0, 1.0 - uDarkness, v);
-
-      gl_FragColor = vec4(col, src.a);
-    }
-  `,
-};
+import {
+  EffectComposer,
+  RenderPass,
+  EffectPass,
+  SMAAEffect,
+  SMAAPreset,
+  EdgeDetectionMode,
+  BloomEffect,
+  KernelSize,
+  DepthOfFieldEffect,
+  VignetteEffect,
+  HueSaturationEffect,
+  BrightnessContrastEffect,
+} from 'postprocessing';
 
 export function buildPipeline(renderer, scene, camera) {
-  const size = new THREE.Vector2();
-  renderer.getSize(size);
-  const dpr = renderer.getPixelRatio();
+  // HalfFloat intermediate buffers = HDR values survive between passes.
+  // Bloom can then brighten any sample above 1.0 (real overbright).
+  const composer = new EffectComposer(renderer, {
+    frameBufferType: THREE.HalfFloatType,
+  });
 
-  const composer = new EffectComposer(renderer);
-  composer.setPixelRatio(dpr);
-  composer.setSize(size.x, size.y);
-
+  // ── Render pass ──────────────────────────────────────────────────────────
   composer.addPass(new RenderPass(scene, camera));
 
-  const vignette = new ShaderPass(VignetteShader);
-  composer.addPass(vignette);
+  // ── Depth of Field ───────────────────────────────────────────────────────
+  // focusDistance / focusRange in world-space metres.
+  // Focus at ~9 m (mid-forest): sharp from ~2 m to ~23 m, then blurs.
+  // resolutionScale 0.5 (default) renders the CoC pass at half res → big perf win.
+  const dof = new DepthOfFieldEffect(camera, {
+    focusDistance:   9,
+    focusRange:      14,
+    bokehScale:      3.0,
+    resolutionScale: 0.5,
+  });
 
-  const smaa = new SMAAPass(Math.floor(size.x * dpr), Math.floor(size.y * dpr));
-  composer.addPass(smaa);
+  // ── Bloom ─────────────────────────────────────────────────────────────────
+  // Luminance threshold keeps bloom on sky and sunlit leaf tips only.
+  const bloom = new BloomEffect({
+    intensity:          0.55,
+    luminanceThreshold: 0.82,
+    luminanceSmoothing: 0.35,
+    kernelSize:         KernelSize.MEDIUM,
+    mipmapBlur:         true,
+  });
 
-  composer.addPass(new OutputPass());
+  // ── Color grade ───────────────────────────────────────────────────────────
+  const hueSat = new HueSaturationEffect({ saturation: 0.10 });
+  const briCon = new BrightnessContrastEffect({ brightness: 0.02, contrast: 0.06 });
+
+  // ── Vignette ──────────────────────────────────────────────────────────────
+  const vignette = new VignetteEffect({ eskil: false, offset: 0.30, darkness: 0.50 });
+
+  // ── SMAA ──────────────────────────────────────────────────────────────────
+  const smaa = new SMAAEffect({
+    preset:            SMAAPreset.HIGH,
+    edgeDetectionMode: EdgeDetectionMode.COLOR,
+  });
+
+  // Single combined pass — all effects share one fragment shader invocation.
+  const effectPass = new EffectPass(camera, dof, bloom, hueSat, briCon, vignette, smaa);
+  composer.addPass(effectPass);
 
   function resize() {
-    const s = new THREE.Vector2();
-    renderer.getSize(s);
-    const pr = renderer.getPixelRatio();
-    composer.setPixelRatio(pr);
-    composer.setSize(s.x, s.y);
-    smaa.setSize(Math.floor(s.x * pr), Math.floor(s.y * pr));
+    const w = renderer.domElement.clientWidth  || window.innerWidth;
+    const h = renderer.domElement.clientHeight || window.innerHeight;
+    composer.setSize(w, h);
   }
 
-  return { composer, resize, passes: { vignette, smaa } };
+  // Update world focus distance each frame (called from main.js).
+  function setFocusTarget(worldDist) {
+    dof.cocMaterial.focusDistance = Math.max(1, worldDist);
+  }
+
+  return { composer, resize, effects: { dof, bloom, hueSat, briCon, vignette, smaa }, setFocusTarget };
 }
