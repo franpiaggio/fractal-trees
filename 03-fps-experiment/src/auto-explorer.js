@@ -15,6 +15,7 @@
 // Speed brakes smoothly when a blocker is close, giving the turn more time.
 
 import * as THREE from 'three';
+import { gsap } from 'gsap';
 import { resolveCollisions } from './collision.js';
 
 const PLAYER_RADIUS = 0.45;
@@ -42,17 +43,16 @@ const BRAKE_START = 8;
 const BRAKE_MIN   = 0.32;
 const BRAKE_SLEW  = 1.5;
 
-// ── Altitude ───────────────────────────────────────────────────────────────
-const HEIGHT_BASE     = 3.0;
-const HEIGHT_AMP      = 2.6;
-const HEIGHT_PERIOD_A = 26;
-const HEIGHT_PERIOD_B = 11.7;
-const HEIGHT_MIN      = 1.4;
+// ── Altitude / roll / look ────────────────────────────────────────────────
+// All oscillations driven by GSAP tweens on an `animated` object so the
+// easing curves (power2.inOut, sine.inOut) give the motion a weightless,
+// floaty quality rather than the mechanical feel of raw sines.
+const HEIGHT_BASE = 3.0;
+const HEIGHT_MIN  = 1.4;
 
-// ── Look wobble ────────────────────────────────────────────────────────────
 const LOOK_PROJ         = 12.0;
 const LOOK_YAW_AMP      = 0.05;
-const LOOK_PITCH_AMP    = 0.035;
+const LOOK_PITCH_AMP    = 0.03;
 const LOOK_YAW_PERIOD   = 22.0;
 const LOOK_PITCH_PERIOD = 15.0;
 
@@ -73,6 +73,39 @@ export function buildAutoExplorer(camera, scene) {
     speed: Math.random() * Math.PI * 2,
   };
   const tmpLook = new THREE.Vector3();
+
+  // ── GSAP-driven animated values ───────────────────────────────────────────
+  // GSAP updates these each RAF tick; the game loop reads them.
+  // power2.inOut on height feels like buoyancy — slows at peaks/troughs.
+  // sine.inOut on roll gives a gentle "riding a wave" banking.
+  // speedBreath is a subtle inhale/exhale in forward speed.
+  const animated = { heightOffset: 0, roll: 0, speedBreath: 1.0 };
+
+  const _tweens = [
+    gsap.to(animated, {
+      heightOffset: 2.4,
+      duration: 8,
+      ease: 'power2.inOut',
+      repeat: -1,
+      yoyo: true,
+    }),
+    gsap.to(animated, {
+      roll: 0.022,             // ~1.3° — subtle banking
+      duration: 11,
+      ease: 'sine.inOut',
+      repeat: -1,
+      yoyo: true,
+      delay: 2.5,              // offset so roll and height don't peak together
+    }),
+    gsap.to(animated, {
+      speedBreath: 1.10,
+      duration: 13,
+      ease: 'sine.inOut',
+      repeat: -1,
+      yoyo: true,
+      delay: 1,
+    }),
+  ];
 
   // ── Debug line: red = TURNING (collision ahead), green = STRAIGHT (free) ─
   const _dbgMat = new THREE.LineBasicMaterial({ color: 0x00ff00, depthTest: false, linewidth: 2 });
@@ -173,9 +206,7 @@ export function buildAutoExplorer(camera, scene) {
     brakeState += (brakeTarget - brakeState) * kBrake;
 
     // ── Velocity ──────────────────────────────────────────────────────────
-    const cruise = FLOAT_SPEED *
-      (1 + SPEED_VARY * Math.sin(phase.speed + elapsed * (2 * Math.PI / SPEED_PERIOD)));
-    const speed = cruise * brakeState;
+    const speed = FLOAT_SPEED * animated.speedBreath * brakeState;
     const vx = Math.sin(heading) * speed;
     const vz = Math.cos(heading) * speed;
 
@@ -187,11 +218,8 @@ export function buildAutoExplorer(camera, scene) {
     camera.position.x = rx;
     camera.position.z = rz;
 
-    // ── Altitude ──────────────────────────────────────────────────────────
-    const h = HEIGHT_BASE
-      + 0.62 * HEIGHT_AMP * Math.sin(elapsed * (2 * Math.PI / HEIGHT_PERIOD_A))
-      + 0.38 * HEIGHT_AMP * Math.sin(elapsed * (2 * Math.PI / HEIGHT_PERIOD_B) + 1.7);
-    camera.position.y = Math.max(HEIGHT_MIN, h);
+    // ── Altitude (GSAP-driven) ────────────────────────────────────────────
+    camera.position.y = Math.max(HEIGHT_MIN, HEIGHT_BASE + animated.heightOffset);
 
     // ── Debug bar ─────────────────────────────────────────────────────────
     // A horizontal bar perpendicular to heading at TRIGGER_DIST ahead.
@@ -219,9 +247,15 @@ export function buildAutoExplorer(camera, scene) {
       camera.position.z + Math.cos(lookYaw) * LOOK_PROJ,
     );
     camera.lookAt(tmpLook);
+    // Banking roll applied AFTER lookAt so it's in camera local space.
+    // Positive roll tilts horizon left (banking right), and vice versa.
+    // We add a subtle extra tilt while TURNING so avoidance feels physical.
+    const turningLean = turnSide * 0.015;  // lean into the turn
+    camera.rotateZ(animated.roll + turningLean);
   }
 
   function dispose() {
+    _tweens.forEach(t => t.kill());
     _dbgGeo.dispose();
     _dbgMat.dispose();
   }
