@@ -247,11 +247,8 @@ export function buildAutoExplorer(camera, scene) {
       camera.position.z + Math.cos(lookYaw) * LOOK_PROJ,
     );
     camera.lookAt(tmpLook);
-    // Banking roll applied AFTER lookAt so it's in camera local space.
-    // Positive roll tilts horizon left (banking right), and vice versa.
-    // We add a subtle extra tilt while TURNING so avoidance feels physical.
-    const turningLean = turnSide * 0.015;  // lean into the turn
-    camera.rotateZ(animated.roll + turningLean);
+    // Gentle GSAP-driven roll only — no snap on state transitions.
+    camera.rotateZ(animated.roll);
   }
 
   function dispose() {
