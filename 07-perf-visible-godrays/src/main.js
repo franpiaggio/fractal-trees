@@ -17,6 +17,7 @@ import { buildDust }             from './dust.js';
 import { enableGyro, isMobile }  from './gyro.js';
 import { updateWind }            from './wind.js';
 import { getPreset, detectDefaultTier } from './quality.js';
+import { buildDebugGui }         from './debug-gui.js';
 
 // ── Splash UI ───────────────────────────────────────────────────────────────
 const overlay   = document.getElementById('overlay');
@@ -109,12 +110,14 @@ function boot(preset, mode) {
   const grass = buildGrass(scene, {
     gridSide:      preset.grassGridSide,
     cellSize:      preset.grassCellSize,
-    bladeHeight:   0.50,
-    bladeWidth:    0.025,
-    segments:      3,
-    windBend:      0.30,
-    tipColor:      '#c8df8a',
-    baseColor:     '#436d28',
+    clumpHeight:   0.55,
+    clumpWidth:    0.55,
+    planes:        preset.grassPlanes,
+    segments:      4,
+    windAmp:       0.08,
+    baseColor:     '#2f3f1e',
+    tipColor1:     '#a6cf7e',
+    tipColor2:     '#46662b',
     edgeFadeStart: preset.grassEdgeFade,
   });
 
@@ -138,8 +141,9 @@ function boot(preset, mode) {
         try { explorer.controls.lock(); } catch (_) { /* ignore */ }
       }
     });
-    // Esc pops out of pointer-lock → return to the menu, same as auto mode.
-    explorer.controls.addEventListener('unlock', () => returnToMenu());
+    // Esc pops out of pointer-lock → frees the mouse so the GUI is usable. It
+    // does NOT return to the menu (that's the GUI's "Reload / Menu" button), so
+    // you can tweak post-processing mid-walk and click the canvas to resume.
   } else {
     explorer = buildAutoExplorer(camera, scene);
     if (MOBILE) enableGyro();
@@ -158,11 +162,21 @@ function boot(preset, mode) {
   function returnToMenu() {
     location.reload();
   }
+  // In auto mode there's no pointer lock, so Esc returns to the menu. In walk
+  // mode Esc is owned by pointer-lock (frees the mouse for the GUI) — use the
+  // GUI's "Reload / Menu" button to leave.
   window.addEventListener('keydown', (e) => {
-    if (e.code === 'Escape') returnToMenu();
+    if (e.code === 'Escape' && mode === 'auto') returnToMenu();
   });
   if (MOBILE) {
     renderer.domElement.addEventListener('touchstart', returnToMenu, { passive: true, once: true });
+  }
+
+  // ── Live tuning GUI (desktop debug build) ─────────────────────────────────
+  // Set DoF focus once here so the GUI can own it (no per-frame override).
+  if (post.setFocusTarget) post.setFocusTarget(explorer.isAuto ? 9 : 6);
+  if (!MOBILE) {
+    buildDebugGui({ post, env, grass, scene, preset, onReturnToMenu: returnToMenu });
   }
 
   window.addEventListener('resize', () => {
@@ -190,8 +204,6 @@ function boot(preset, mode) {
     dust.update(camera, t);
     env.updateSun(camera.position);
     updateWind(t);
-
-    if (post.setFocusTarget) post.setFocusTarget(explorer.isAuto ? 9 : 6);
 
     post.composer.render();
     frameCount++;

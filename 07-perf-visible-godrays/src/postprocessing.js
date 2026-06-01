@@ -79,53 +79,38 @@ export function buildPipeline(renderer, scene, camera, preset, light) {
   }
 
   // ── Main effect chain (mergeable into one EffectPass) ────────────────────
-  const effects = [];
+  const bloom = preset.bloomEnabled ? new BloomEffect({
+    intensity:          preset.bloomIntensity ?? 0.2,
+    luminanceThreshold: preset.bloomThreshold ?? 0.92,
+    luminanceSmoothing: preset.bloomSmoothing ?? 0.15,
+    kernelSize:         KERNEL_LOOKUP[preset.bloomKernel] ?? KernelSize.MEDIUM,
+    mipmapBlur:         true,
+  }) : null;
 
-  if (preset.bloomEnabled) {
-    effects.push(new BloomEffect({
-      intensity:          preset.bloomIntensity ?? 0.2,
-      luminanceThreshold: preset.bloomThreshold ?? 0.92,
-      luminanceSmoothing: preset.bloomSmoothing ?? 0.15,
-      kernelSize:         KERNEL_LOOKUP[preset.bloomKernel] ?? KernelSize.MEDIUM,
-      mipmapBlur:         true,
-    }));
-  }
+  const dof = preset.dofEnabled ? new DepthOfFieldEffect(camera, {
+    focusDistance:   9,
+    focusRange:      14,
+    bokehScale:      preset.dofBokehScale ?? 2.0,
+    resolutionScale: preset.dofResScale   ?? 0.5,
+  }) : null;
 
-  let dof = null;
-  if (preset.dofEnabled) {
-    dof = new DepthOfFieldEffect(camera, {
-      focusDistance:   9,
-      focusRange:      14,
-      bokehScale:      preset.dofBokehScale ?? 2.0,
-      resolutionScale: preset.dofResScale   ?? 0.5,
-    });
-    effects.push(dof);
-  }
-
-  effects.push(new ToneMappingEffect({
-    mode: ToneMappingMode.ACES_FILMIC,
-  }));
-
-  effects.push(new HueSaturationEffect({ saturation: 0.10 }));
-  effects.push(new BrightnessContrastEffect({ brightness: 0.02, contrast: 0.06 }));
-
-  effects.push(new VignetteEffect({
+  const toneMapping = new ToneMappingEffect({ mode: ToneMappingMode.ACES_FILMIC });
+  const hueSat = new HueSaturationEffect({ saturation: 0.08 });
+  // contrast softened to 0 (v06 added +0.06 which crushed the grass roots to
+  // near-black) — tune live in the GUI if you want more punch.
+  const brightnessContrast = new BrightnessContrastEffect({ brightness: 0.02, contrast: 0.0 });
+  const vignette = new VignetteEffect({
     eskil:    false,
-    offset:   preset.vignetteOffset   ?? 0.30,
-    darkness: preset.vignetteDarkness ?? 0.50,
-  }));
-
-  if (preset.grainEnabled) {
-    const grain = new NoiseEffect({ blendFunction: BlendFunction.SCREEN });
-    grain.blendMode.opacity.value = preset.grainOpacity ?? 0.04;
-    effects.push(grain);
-  }
-
-  effects.push(new SMAAEffect({
+    offset:   preset.vignetteOffset ?? 0.30,
+    darkness: Math.min(0.36, preset.vignetteDarkness ?? 0.5),   // gentler corners
+  });
+  const smaa = new SMAAEffect({
     preset:            SMAA_LOOKUP[preset.smaaPreset] ?? SMAAPreset.MEDIUM,
     edgeDetectionMode: EdgeDetectionMode.COLOR,
-  }));
+  });
 
+  const effects = [bloom, dof, toneMapping, hueSat, brightnessContrast, vignette, smaa]
+    .filter(Boolean);
   composer.addPass(new EffectPass(camera, ...effects));
 
   if (preset.chromAbEnabled) {
@@ -149,5 +134,8 @@ export function buildPipeline(renderer, scene, camera, preset, light) {
     if (dof) dof.cocMaterial.focusDistance = Math.max(1, worldDist);
   }
 
-  return { composer, resize, setFocusTarget, godrays };
+  return {
+    composer, resize, setFocusTarget, godrays,
+    effects: { bloom, dof, toneMapping, hueSat, brightnessContrast, vignette },
+  };
 }

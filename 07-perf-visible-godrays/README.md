@@ -86,6 +86,35 @@ explorer drifts; if you want them stronger, raise `godraysDensity` and
 
 ---
 
+## "Fluffy" grass (FluffyGrass technique)
+
+The geometric single-blade grass read as a static comb of vertical lines, so v07
+switched to **Ebenezer's FluffyGrass approach** (https://github.com/thebenezer/FluffyGrass,
+MIT — assets + credit in `src/assets/CREDITS.txt`):
+
+- Each instance is a **clump of 2–3 crossed vertical planes**, each cut into a
+  fan of soft blades by an **alpha texture** (`grass-blades.jpeg`). Full from any
+  angle, fluffy instead of comb-like.
+- A **perlin noise texture** drives wind, per-place tip-colour variation, and a
+  base→tip colour gradient.
+- We keep our **infinite-streaming** trick (clump XZ from `gl_InstanceID` + a wrap
+  `mod()`), so the field follows the player. Far fewer instances than the old
+  per-blade field (~12–32k clumps vs. hundreds of thousands of blades).
+- **Black-blade fix:** the clumps are double-sided, so Three flipped the normal on
+  back faces and they rendered black. The shader forces the up-normal on both
+  faces (`normal = normalize(vNormal)`), giving an evenly-lit soft carpet.
+
+## Live tuning GUI (`debug-gui.js`)
+
+A `lil-gui` panel (top-right, collapsed) binds to the **real** effect instances so
+you can see and tweak the whole look live: tone mapping, bloom, DoF, vignette,
+brightness/contrast/saturation, godrays, grass colours/AO/wind, and scene
+light/fog. Desktop only. In walk mode, **Esc** frees the mouse for the GUI (it no
+longer returns to the menu — use the GUI's *Reload / Menu* button); click the
+canvas to walk again.
+
+---
+
 ## 3. Manual walk is back
 
 v02–v04 let you either walk first-person (WASD + mouse) **or** hand it to the

@@ -31,9 +31,13 @@ export const TIER_PRESETS = {
     viewChunks:    2,
     renderDistance: 28,              // ≈ fogFar + margin; trees past this are pure fog
 
-    // Grass
-    grassGridSide:    640,
-    grassCellSize:    0.055,
+    // Grass — FluffyGrass clumps (each instance is a tuft of crossed alpha
+    // planes, not a single blade), so the instance count is far lower than the
+    // old per-blade field. cellSize = clump spacing; gridSide × cellSize / 2 is
+    // the field radius. planes = crossed quads per clump (fewer on low tier).
+    grassGridSide:    110,
+    grassCellSize:    0.42,            // ~12k clumps, field radius ≈ 23 m
+    grassPlanes:      2,
     grassEdgeFade:    0.86,
 
     // Trees
@@ -86,8 +90,9 @@ export const TIER_PRESETS = {
     viewChunks:    2,
     renderDistance: 34,
 
-    grassGridSide:    832,
-    grassCellSize:    0.05,
+    grassGridSide:    145,
+    grassCellSize:    0.36,            // ~21k clumps, field radius ≈ 26 m
+    grassPlanes:      3,
     grassEdgeFade:    0.90,
 
     leavesCountMult:  0.75,
@@ -132,8 +137,9 @@ export const TIER_PRESETS = {
     viewChunks:    2,
     renderDistance: 40,
 
-    grassGridSide:    1024,
-    grassCellSize:    0.045,
+    grassGridSide:    180,
+    grassCellSize:    0.32,            // ~32k clumps, field radius ≈ 29 m
+    grassPlanes:      3,
     grassEdgeFade:    0.92,
 
     leavesCountMult:  1.0,
