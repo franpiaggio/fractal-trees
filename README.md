@@ -19,7 +19,10 @@ every version.
 | **01** | `01-ez-tree-baseline/`      | Drop-in library: `@dgreenheck/ez-tree` does the procedural work for us. Hero + small instanced background forest, orbit camera.                                | Vite + vanilla JS + Three.js |
 | **02** | `02-fps-infinite-forest/`   | First-person walk + sprint through a chunk-streamed, FOV-culled, instanced forest with tree collisions, procedural ground, and a single-`InstancedMesh` fluffy grass carpet (~518k blades) tucked into atmospheric fog.   | Vite + vanilla JS + Three.js |
 | **03** | `03-fps-experiment/`        | Verbatim fork of 02 as a base to iterate on. Divergence is tracked in its own README. Runs on port 5175 so it can coexist with 02.                              | Vite + vanilla JS + Three.js |
-| 04    | _(future)_                   | …                                                                                                                                                              |                              |
+| **04** | `04-post-processing/`       | HDR post-processing pipeline: Bloom + Depth-of-Field + SMAA in an `EffectComposer`, ACES tone-mapping, leveled horizon, spatial grass color, world-space dust motes, and mobile gyroscope look in auto mode.            | Vite + vanilla JS + Three.js |
+| **05** | `05-graphics-tiers/`        | Auto-explore-only build with a Low/Medium/High graphics-tier selector on the splash; the heavy boot runs only after a tier is picked. Grain + chromatic aberration removed, bloom dialed way down.                       | Vite + vanilla JS + Three.js |
+| **06** | `06-godrays/`               | Volumetric godrays via `three-good-godrays` raymarching the directional light's shadow map (shadows forced on for every tier). Lacy alpha-tested canopy shadows feed the rays.                                           | Vite + vanilla JS + Three.js |
+| **07** | `07-perf-visible-godrays/`  | Fork of 06 that fixes two regressions and restores one feature: godrays you can actually see (low sun, pulled-back fog, denser rays), an honest instance budget (distance-cull at fog range + smaller load radius → ~65× fewer wasted trees), and a splash **mode picker** that brings back manual first-person walking (WASD) alongside auto-explore. | Vite + vanilla JS + Three.js |
 
 To run any version: `cd <folder> && npm install && npm run dev`.
 
