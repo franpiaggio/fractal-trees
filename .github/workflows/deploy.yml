@@ -10,7 +10,7 @@ on:
       - '04-post-processing/**'
       - '05-graphics-tiers/**'
       - '06-godrays/**'
-      - 'ps1/**'
+      - '15-ps1/**'
       - 'pages/**'
       - '.github/workflows/deploy.yml'
   workflow_dispatch:
@@ -73,8 +73,8 @@ jobs:
           npm ci
           npm run build
 
-      - name: Build PS1
-        working-directory: ps1
+      - name: Build 15
+        working-directory: 15-ps1
         run: |
           npm ci
           npm run build
@@ -90,7 +90,7 @@ jobs:
           cp -r 04-post-processing/dist     _site/04
           cp -r 05-graphics-tiers/dist      _site/05
           cp -r 06-godrays/dist             _site/06
-          cp -r ps1/dist                    _site/ps1
+          cp -r 15-ps1/dist                 _site/15
           ls -la _site
 
       - uses: actions/configure-pages@v5
