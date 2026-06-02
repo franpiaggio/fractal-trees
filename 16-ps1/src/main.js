@@ -600,6 +600,7 @@ function boot(preset, mode) {
     dust.update(camera, t);
     seasonFx.update(camera, t, world);
     shafts.update(camera, t);
+    env.setTime(t);
     env.updateSun(camera.position);
     updateWind(t);
 

@@ -185,6 +185,8 @@ export function buildEnvironment(scene, renderer, preset) {
       uZenith:  { value: ZENITH },
       uSunGlow: { value: SUN_GLOW },
       uSunDir:  { value: SUN_DIR.clone() },
+      uTime:    { value: 0 },
+      uCloud:   { value: 0.5 },   // coverage 0..1
     },
     vertexShader: /* glsl */`
       varying vec3 vDir;
@@ -196,12 +198,41 @@ export function buildEnvironment(scene, renderer, preset) {
     fragmentShader: /* glsl */`
       varying vec3 vDir;
       uniform vec3 uHorizon, uZenith, uSunGlow, uSunDir;
+      uniform float uTime, uCloud;
+
+      float hash21(vec2 p){ p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
+      float vnoise(vec2 p){
+        vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+        float a = hash21(i), b = hash21(i + vec2(1,0)), c = hash21(i + vec2(0,1)), d = hash21(i + vec2(1,1));
+        return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+      }
+      float fbm(vec2 p){ float v = 0.0, a = 0.5; for (int i = 0; i < 4; i++){ v += a * vnoise(p); p *= 2.0; a *= 0.5; } return v; }
+      // 4x4 Bayer to dither ONLY the sky gradient — breaks the PS1 quantiser's
+      // banding on the smooth sky without touching the (textured) trees.
+      float bayer2(vec2 a){ a = floor(a); return fract(a.x / 2.0 + a.y * a.y * 0.75); }
+      float bayer4(vec2 a){ return bayer2(0.5 * a) * 0.25 + bayer2(a); }
+
       void main() {
-        float up = clamp(vDir.y, 0.0, 1.0);
+        vec3 vd = normalize(vDir);
+        float up = clamp(vd.y, 0.0, 1.0);
         vec3 col = mix(uHorizon, uZenith, smoothstep(0.0, 0.6, up));
-        float s = max(dot(normalize(vDir), normalize(uSunDir)), 0.0);
+        float s = max(dot(vd, normalize(uSunDir)), 0.0);
         float glow = pow(s, 6.0) * 0.55 + pow(s, 90.0) * 0.5;   // soft halo + tighter core
+
+        // ── Painted drifting clouds (skybox-style; the dither bands them PSX) ──
+        float skyMask = smoothstep(0.03, 0.42, vd.y);            // only above the horizon
+        vec2 cuv = vd.xz / (vd.y + 0.35) * 1.5 + uTime * 0.012;  // planar sky projection + slow drift
+        float n = fbm(cuv) * 0.62 + fbm(cuv * 2.3 + 7.0) * 0.38; // two layers for shape
+        float cov = mix(0.66, 0.34, clamp(uCloud, 0.0, 1.0));    // higher uCloud → more cloud
+        float cloud = smoothstep(cov, cov + 0.20, n) * skyMask;
+        cloud *= 1.0 - glow * 0.6;                               // let the sun core punch through
+        vec3 cloudCol = mix(vec3(0.80, 0.84, 0.88), uSunGlow, glow * 0.7);
+
         col = mix(col, uSunGlow, clamp(glow, 0.0, 0.85) * (1.0 - up * 0.5));
+        col = mix(col, cloudCol, cloud * 0.85);
+        // Pre-dither by ~1 quantisation step so the global 56-level quantiser
+        // doesn't band the smooth sky into contour rings.
+        col += (bayer4(gl_FragCoord.xy) - 0.5) * (1.0 / 56.0);
         gl_FragColor = vec4(col, 1.0);
       }`,
   });
@@ -316,5 +347,8 @@ export function buildEnvironment(scene, renderer, preset) {
     groundMat.userData.uSnow.value = s.snow ? 1 : 0;   // winter → snow blanket
   }
 
-  return { sun, hemi, ground, skydome, updateSun, setPalette, skyColor: SKY, sunDir: SUN_DIR };
+  function setTime(t) { skyMat.uniforms.uTime.value = t; }
+  function setCloud(v) { skyMat.uniforms.uCloud.value = v; }
+
+  return { sun, hemi, ground, skydome, updateSun, setPalette, setTime, setCloud, skyColor: SKY, sunDir: SUN_DIR };
 }
