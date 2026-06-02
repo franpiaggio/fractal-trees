@@ -27,6 +27,7 @@ every version.
 | **09** | `09-forest-variation/`      | Fork of 08 that breaks the uniform forest: coherent-noise **density variation** (clearings ↔ thickets, 4–26 per chunk instead of a rigid 18) and **species groves** (patches dominated by one species). Runs on port 5181.                       | Vite + vanilla JS + Three.js |
 | **10** | `10-mobile-perf/`           | Fork of 09 for **low-end phones** (Low tier drops shadows/godrays/bloom/SMAA, curated presets, real geometry reduction) + less fog on High, a **gradient sky dome** (atmosphere), rare **giant trees**, a fixed inspector framing, and an opaque loading screen. Port 5182. | Vite + vanilla JS + Three.js |
 | **11** | `11-pixel-art/`             | Fork of 10 with a retro **pixel-art** look: low-res nearest-upscaled rendering, vertex wobble, 4×4 ordered dither + colour quantise, unfiltered textures, no AA. Port 5183.                                                                       | Vite + vanilla JS + Three.js |
+| **12** | `12-seasons/`               | Fork of 10 with **four seasons** (per-leaf recolour, season palette, falling leaves/snow/petals — autumn leaves from a real 4×4 atlas), live **Randomize** (in-game + settings), godray A/B, near-edge cull (no pop-in) and a hide-all-UI toggle. Port 5184. | Vite + vanilla JS + Three.js |
 
 To run any version: `cd <folder> && npm install && npm run dev`.
 
