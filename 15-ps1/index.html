@@ -93,7 +93,10 @@
               font-size: 11px; color: var(--muted); }
 
       /* ── In-scene HUD ─────────────────────────────────────────────── */
+      /* fps/tree-count stats hidden (dev info; also overlapped the audio icons
+         on mobile). */
       #hud {
+        display: none;
         position: fixed; left: 10px; bottom: 10px;
         font-size: 11px; color: oklch(0.7 0.015 245 / 0.6); pointer-events: none;
         background: oklch(0.13 0.01 245 / 0.35); padding: 4px 8px; border-radius: 6px;

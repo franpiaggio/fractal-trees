@@ -61,8 +61,9 @@ let activeRecording = null;   // held so its AudioContext/dest nodes aren't GC'd
 const ambient = new Audio(forestAudioUrl);
 ambient.loop = true;
 ambient.preload = 'auto';
-ambient.volume = 0;
 const AMBIENT_VOL = 0.5;
+ambient.volume = AMBIENT_VOL;
+ambient.muted = true;          // OFF by default — the 🔊 button unmutes + plays it
 let ambientStarted = false;
 
 // ── Music track ("Pine Drift") ───────────────────────────────────────────────
@@ -73,6 +74,7 @@ music.loop = true;
 music.preload = 'auto';
 music.volume = 0.6;
 let musicOn = false;
+let paintMus = () => {};   // re-bound when the music button is created
 
 function startAmbient() {
   if (ambientStarted) return;
@@ -87,22 +89,32 @@ function startAmbient() {
     };
     requestAnimationFrame(fade);
   }).catch(() => { /* autoplay blocked — the toggle can resume it */ });
-  addAudioButtons();
 }
 
-// Shared style for the bottom-right round audio buttons.
-const AUDIO_BTN_CSS =
-  'position:fixed;bottom:12px;z-index:2147483647;width:40px;height:40px;' +
-  'border-radius:8px;background:rgba(28,35,42,0.82);color:#cfd5dc;' +
+// Autoplay the music from the top (called from the first user gesture).
+function startMusic() {
+  if (musicOn) return;
+  musicOn = true;
+  music.currentTime = 0;
+  music.play().catch(() => { musicOn = false; paintMus(); });
+  paintMus();
+}
+
+const AUDIO_BTN_BASE =
+  'width:40px;height:40px;border-radius:8px;background:rgba(28,35,42,0.82);color:#cfd5dc;' +
   'border:1px solid rgba(255,255,255,0.12);backdrop-filter:blur(4px);cursor:pointer;' +
   'font-size:17px;line-height:1;display:flex;align-items:center;justify-content:center;';
 
-function addAudioButtons() {
-  // Mute toggle for the ambient forest loop (right-most).
+// Round 🔊 / 🎵 buttons. Pass a `container` to drop them inline (desktop top HUD
+// bar, after the other buttons); otherwise fixed bottom-right (mobile). Returns a
+// remover so they can be tied to the session lifecycle.
+function addAudioButtons(container = null) {
+  const inBar = !!container;
+  const parent = container || document.body;
+
   const snd = document.createElement('button');
-  snd.type = 'button';
-  snd.classList.add('ui-toggleable');
-  snd.style.cssText = AUDIO_BTN_CSS + 'right:12px;';
+  snd.type = 'button'; snd.classList.add('ui-toggleable');
+  snd.style.cssText = inBar ? AUDIO_BTN_BASE : ('position:fixed;bottom:12px;right:12px;z-index:2147483647;' + AUDIO_BTN_BASE);
   const paintSnd = () => { snd.textContent = ambient.muted ? '🔇' : '🔊'; snd.title = ambient.muted ? 'Unmute ambience' : 'Mute ambience'; };
   snd.addEventListener('click', () => {
     ambient.muted = !ambient.muted;
@@ -110,14 +122,11 @@ function addAudioButtons() {
     paintSnd();
   });
   paintSnd();
-  document.body.appendChild(snd);
 
-  // Music toggle ("Pine Drift") — OFF by default, restarts from the top on play.
   const mus = document.createElement('button');
-  mus.type = 'button';
-  mus.classList.add('ui-toggleable');
-  mus.style.cssText = AUDIO_BTN_CSS + 'right:60px;';
-  const paintMus = () => { mus.textContent = '🎵'; mus.style.opacity = musicOn ? '1' : '0.45'; mus.title = musicOn ? 'Stop music' : 'Play music'; };
+  mus.type = 'button'; mus.classList.add('ui-toggleable');
+  mus.style.cssText = inBar ? AUDIO_BTN_BASE : ('position:fixed;bottom:12px;right:60px;z-index:2147483647;' + AUDIO_BTN_BASE);
+  paintMus = () => { mus.textContent = '🎵'; mus.style.opacity = musicOn ? '1' : '0.45'; mus.title = musicOn ? 'Stop music' : 'Play music'; };
   mus.addEventListener('click', () => {
     musicOn = !musicOn;
     if (musicOn) { music.currentTime = 0; music.play().catch(() => { musicOn = false; paintMus(); }); }
@@ -125,7 +134,10 @@ function addAudioButtons() {
     paintMus();
   });
   paintMus();
-  document.body.appendChild(mus);
+
+  parent.appendChild(snd);
+  parent.appendChild(mus);
+  return () => { snd.remove(); mus.remove(); paintMus = () => {}; };
 }
 
 // ── Splash UI ───────────────────────────────────────────────────────────────
@@ -195,7 +207,7 @@ let started = false;
 function chooseMode(mode) {
   if (started) return;
   started = true;
-  startAmbient();                 // this click is the gesture audio needs
+  // Audio is OFF by default in this exploratory build — the 🔊/🎵 buttons start it.
   btnFree.disabled = btnDemo.disabled = true;
   if (btnInspect) btnInspect.disabled = true;
   // Switch the splash to an opaque loading screen so no half-built scene shows
@@ -421,12 +433,13 @@ function boot(preset, mode) {
     b.addEventListener('click', onClick);
     return b;
   };
-  // On mobile, a standalone Randomize below the HUD bar (Exit lives in that bar).
+  // On mobile: Randomize bottom-centre, audio buttons bottom-right.
   if (MOBILE) {
     const rb = makeHudBtn('Random', randomizeForest);
-    rb.style.cssText += 'position:fixed;top:56px;left:12px;z-index:42;';
+    rb.style.cssText += 'position:fixed;bottom:18px;left:50%;transform:translateX(-50%);z-index:42;';
     document.body.appendChild(rb);
     activeCleanups.push(() => rb.remove());
+    activeCleanups.push(addAudioButtons());
   }
 
   // Build the controller for the chosen mode. Both expose the same shape:
@@ -528,6 +541,8 @@ function boot(preset, mode) {
     placeBtn('Exit', returnToMenu);
     placeBtn('Randomize', randomizeForest);
     placeBtn('Hide UI', () => document.body.classList.add('ui-hidden'));
+    // Desktop: 🔊 / 🎵 sit in the same top bar, after the buttons (OFF by default).
+    activeCleanups.push(addAudioButtons(btnBar));
 
     // Small restore square — only visible while the UI is hidden.
     const restore = makeHudBtn('', () => document.body.classList.remove('ui-hidden'));
