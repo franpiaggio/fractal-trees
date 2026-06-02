@@ -5,3 +5,4 @@ dist/
 .vite/
 .env
 .env.local
+**/public/tree-assets.zip
