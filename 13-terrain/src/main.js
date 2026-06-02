@@ -25,6 +25,12 @@ import { buildSettings }        from './settings.js';
 import { applySeasonToLeaf, setSeason, buildSeasonParticles } from './seasons.js';
 import forestAudioUrl from './assets/forest.mp3';
 import musicUrl from './assets/pine-drift.mp3';
+import { isRecordMode, getRecordOpts, recordCanvasWithAudio } from './recorder.js';
+
+// Record mode (URL hash `#record`) drives a demo capture for socials.
+const RECORD = isRecordMode();
+const REC = getRecordOpts();
+let activeRecording = null;   // held so its AudioContext/dest nodes aren't GC'd
 
 // ── Ambient forest audio ─────────────────────────────────────────────────────
 // Loops in the background once a mode is chosen (the mode-button click is the
@@ -152,6 +158,15 @@ for (const btn of tierBtns) {
 // + toggleable gyro), so it's available there too.
 if (MOBILE && splashHint) {
   splashHint.textContent = 'walk · joystick + drag to look';
+}
+
+// Record mode: pre-select High and turn "Demo" into the capture trigger. Clicking
+// it is the user gesture audio/recording need; boot() runs the automated capture.
+if (RECORD) {
+  selectedTier = 'high';
+  syncTierUI();
+  if (btnDemo) btnDemo.textContent = `● Record demo (${REC.secs}s)`;
+  if (splashHint) splashHint.textContent = `${REC.native ? 'native res' : `${REC.w}×${REC.h}`} · ${REC.secs}s · music @${REC.musicStart}s · ${REC.auto ? `auto R ${REC.rint}s` : 'press R to the beat'}`;
 }
 
 let started = false;
@@ -527,6 +542,71 @@ function boot(preset, mode) {
       lastStatTime = t;
     }
   });
+
+  // ── Automated capture (record mode) ───────────────────────────────────────
+  if (RECORD && mode === 'demo') {
+    const startRec = () => {
+      // Unless recording at native window resolution, lock the drawing buffer to
+      // the target social size (CSS untouched, so the captured stream is exactly
+      // REC.w × REC.h regardless of window size).
+      if (!REC.native) {
+        renderer.setSize(REC.w, REC.h, false);
+        post.composer.setSize(REC.w, REC.h);
+        camera.aspect = REC.w / REC.h;
+        camera.updateProjectionMatrix();
+      }
+      document.body.classList.add('ui-hidden');        // clean, UI-free frame
+
+      // Music: start from its 0:50 mark at video second 0 (clamped so the clip
+      // doesn't run off the end of the track).
+      ambient.muted = false;
+      music.muted = false;
+      const dur = Number.isFinite(music.duration) ? music.duration : null;
+      const startAt = dur ? Math.min(REC.musicStart, Math.max(0, dur - REC.secs - 1)) : REC.musicStart;
+      try { music.currentTime = startAt; } catch (_) { /* metadata not ready */ }
+      music.play().catch(() => {});
+
+      // R cuts: by default YOU press R to the beat (the R key works during the
+      // capture). With ?auto=1 it fires on a timer, delayed by roffset so the cuts
+      // sit on the beat (first at roffset+rint, then every rint).
+      let rInterval = null, rStart = null;
+      if (REC.auto) {
+        rStart = setTimeout(() => { rInterval = setInterval(randomizeForest, REC.rint * 1000); }, REC.roffset * 1000);
+      }
+
+      // REC indicator + countdown. It's a DOM overlay, so it is NOT in the captured
+      // canvas — it only helps you time the R presses and see when it ends.
+      const recDot = document.createElement('div');
+      recDot.style.cssText = 'position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:2147483647;' +
+        'font:600 14px ui-monospace,Menlo,Consolas,monospace;color:#fff;background:rgba(180,30,30,0.85);' +
+        'padding:6px 12px;border-radius:8px;letter-spacing:0.06em;pointer-events:none;';
+      document.body.appendChild(recDot);
+      let remain = REC.secs;
+      const paintDot = () => { recDot.textContent = `● REC  ${remain}s${REC.auto ? '' : '  ·  press R to the beat'}`; };
+      paintDot();
+      const dotTimer = setInterval(() => { remain = Math.max(0, remain - 1); paintDot(); }, 1000);
+
+      activeRecording = recordCanvasWithAudio({
+        canvas: renderer.domElement,
+        fps: REC.fps,
+        mbps: REC.mbps,
+        audioElements: [ambient, music],
+        durationMs: REC.secs * 1000,
+        onStop: () => {
+          if (rStart) clearTimeout(rStart);
+          if (rInterval) clearInterval(rInterval);
+          clearInterval(dotTimer);
+          recDot.remove();
+          music.pause();
+          console.log('[13] recording saved — send me the .webm to convert to mp4');
+        },
+      });
+    };
+    // Begin only once the scene is fully loaded (grass textures in) + 2 frames.
+    Promise.resolve(grass.ready).catch(() => {})
+      .then(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))))
+      .then(startRec);
+  }
 
   renderer.compile(scene, camera);
   console.log(

@@ -128,14 +128,18 @@ export function buildWorld(scene, templates, { worldSeed = 1337, viewChunks = 4,
       const reach = renderDistance + h * (t.giant ? 0.7 : 0.5);
       if (dx * dx + dz * dz > reach * reach) continue;
       totalInRange++;
-      sphere.center.set(t.x, h * 0.5, t.z);
+      // Cull sphere must sit at the tree's ACTUAL height on the terrain — using a
+      // flat y=h*0.5 put small props (bushes) at the wrong height on the relief,
+      // so their tiny sphere missed the frustum and they vanished up close.
+      const groundY = terrainHeight(t.x, t.z);
+      sphere.center.set(t.x, groundY + h * 0.5, t.z);
       sphere.radius = h * 0.7;
       if (!frustum.intersectsSphere(sphere)) continue;
 
       const slot = writeIdx[t.templateIdx];
       if (slot >= MAX_INSTANCES_PER_TEMPLATE) continue;
 
-      tmpPos.set(t.x, terrainHeight(t.x, t.z), t.z);   // sit on the terrain
+      tmpPos.set(t.x, groundY, t.z);                   // sit on the terrain
       tmpQuat.setFromAxisAngle(AXIS_Y, t.rotY);
       tmpScale.setScalar(t.scale);
       tmpMatrix.compose(tmpPos, tmpQuat, tmpScale);

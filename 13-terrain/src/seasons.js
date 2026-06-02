@@ -4,7 +4,7 @@
 // (pines) keep most of their colour through autumn and winter.
 
 import * as THREE from 'three';
-import { terrainHeight } from './terrain.js';
+import { terrainHeight, TERRAIN_GLSL } from './terrain.js';
 
 const LEAF_ATLAS_URL = new URL('./assets/leaves-atlas.png', import.meta.url).href;
 const MAX_LEAF_ANCHORS = 16;     // how many nearby trees can shed leaves at once
@@ -123,6 +123,7 @@ const PARTICLE_TYPES = {
 };
 
 const P_VERT = /* glsl */ `
+  ${TERRAIN_GLSL}
   attribute vec3 aSeed;
   uniform float uTime, uFall, uSize, uSway, uBoxW, uBoxH;
   uniform vec3 uCamera;
@@ -146,12 +147,14 @@ const P_VERT = /* glsl */ `
       vec4 anc = uAnchors[idx];
       float ang = aSeed.y * 6.2832;
       float rad = sqrt(aSeed.z) * anc.w;            // uniform within the canopy disc
-      float top = anc.z + 4.0 + anc.w * 1.6;        // canopy top above the terrain
-      float fallH = top - anc.z;
-      float fall = mod(uTime * uFall + aSeed.y * fallH, fallH);
-      wp.x = anc.x + cos(ang) * rad + sway;
-      wp.z = anc.y + sin(ang) * rad + cos(uTime * 0.6 + ph) * uSway * 0.6;
-      wp.y = top - fall;                            // canopy → ground, loop
+      float lx = anc.x + cos(ang) * rad;
+      float lz = anc.y + sin(ang) * rad;
+      float ground = terrainH(vec2(lx, lz));        // local terrain UNDER this leaf
+      float canopyH = 4.0 + anc.w * 1.6;            // fall height: canopy top → ground
+      float fall = mod(uTime * uFall + aSeed.y * canopyH, canopyH);
+      wp.x = lx + sway;
+      wp.z = lz + cos(uTime * 0.6 + ph) * uSway * 0.6;
+      wp.y = ground + canopyH - fall;               // lands on the local ground, loops
     } else {
       // SNOW / PETALS: world-space positions that wrap around the camera so you
       // fall THROUGH them instead of dragging them along.
