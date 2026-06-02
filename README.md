@@ -24,6 +24,7 @@ every version.
 | **06** | `06-godrays/`               | Volumetric godrays via `three-good-godrays` raymarching the directional light's shadow map (shadows forced on for every tier). Lacy alpha-tested canopy shadows feed the rays.                                           | Vite + vanilla JS + Three.js |
 | **07** | `07-perf-visible-godrays/`  | Fork of 06 that fixes two regressions and restores one feature: godrays you can actually see (low sun, pulled-back fog, denser rays), an honest instance budget (distance-cull at fog range + smaller load radius → ~65× fewer wasted trees), a splash **mode picker** bringing back manual first-person walking (WASD), "fluffy" alpha-clump grass (FluffyGrass technique), and a `lil-gui` live tuning panel for all post-processing. | Vite + vanilla JS + Three.js |
 | **08** | `08-experiments/`           | Verbatim fork of 07 kept as a sandbox for new experiments. Divergence tracked in its own README. Runs on port 5180.                                                                                                                              | Vite + vanilla JS + Three.js |
+| **09** | `09-forest-variation/`      | Fork of 08 that breaks the uniform forest: coherent-noise **density variation** (clearings ↔ thickets, 4–26 per chunk instead of a rigid 18) and **species groves** (patches dominated by one species). Runs on port 5181.                       | Vite + vanilla JS + Three.js |
 
 To run any version: `cd <folder> && npm install && npm run dev`.
 
