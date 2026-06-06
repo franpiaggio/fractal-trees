@@ -12,6 +12,7 @@ on:
       - '06-godrays/**'
       - '15-ps1/**'
       - '16-ps1/**'
+      - '18-explore-orbs/**'
       - 'pages/**'
       - '.github/workflows/deploy.yml'
   workflow_dispatch:
@@ -86,6 +87,12 @@ jobs:
           npm ci
           npm run build
 
+      - name: Build 18
+        working-directory: 18-explore-orbs
+        run: |
+          npm ci
+          npm run build
+
       # Combine all builds + landing page into one deploy artifact.
       - name: Assemble deploy directory
         run: |
@@ -99,6 +106,7 @@ jobs:
           cp -r 06-godrays/dist             _site/06
           cp -r 15-ps1/dist                 _site/15
           cp -r 16-ps1/dist                 _site/16
+          cp -r 18-explore-orbs/dist        _site/18
           ls -la _site
 
       - uses: actions/configure-pages@v5
